@@ -1,0 +1,43 @@
+# .gitignore
+.env
+.env.local
+.env.production
+*.env
+
+# Database
+*.db
+*.sqlite
+database.db
+
+# Logs
+logs/
+*.log
+
+# Dependencies
+node_modules/
+build/
+dist/
+
+# n8n
+n8n-data/
+.n8n/
+
+# Certificates
+*.pem
+*.key
+*.crt
+
+# Backups
+backups/
+*.backup
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
