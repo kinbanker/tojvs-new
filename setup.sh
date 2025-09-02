@@ -111,58 +111,6 @@ fi
 
 cd ..
 
-# Docker check for n8n
-echo ""
-echo "Checking Docker for n8n..."
-echo "-------------------------"
-
-if command -v docker &> /dev/null; then
-    print_success "Docker is installed"
-    
-    read -p "Do you want to start n8n with Docker? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Check if docker-compose.yml exists
-        if [ ! -f docker-compose.yml ]; then
-            print_warning "Creating docker-compose.yml..."
-            cat > docker-compose.yml << 'EOF'
-version: '3.8'
-
-services:
-  n8n:
-    image: n8nio/n8n
-    container_name: n8n
-    restart: always
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - N8N_HOST=localhost
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - NODE_ENV=production
-      - WEBHOOK_URL=http://localhost:5678/
-    volumes:
-      - ./n8n-data:/home/node/.n8n
-    networks:
-      - n8n-network
-
-networks:
-  n8n-network:
-    driver: bridge
-EOF
-            print_success "docker-compose.yml created"
-        fi
-        
-        docker-compose up -d
-        print_success "n8n started with Docker"
-    fi
-else
-    print_warning "Docker not installed. n8n will need to be set up separately."
-fi
-
 # Start services
 echo ""
 echo "Starting Services..."
@@ -187,12 +135,11 @@ echo ""
 echo "Next steps:"
 echo "1. Edit backend/.env with your credentials:"
 echo "   - JWT_SECRET (generate a secure random string)"
-echo "   - N8N_WEBHOOK_URL (if different from default)"
+echo "   - N8N_WEBHOOK_URL=http://<your-n8n-server-ip>:5678/"
 echo ""
 echo "2. Access your services:"
 echo "   - Frontend: http://localhost:3000"
 echo "   - Backend API: http://localhost:3001"
-echo "   - n8n: http://localhost:5678"
 echo ""
 echo "3. PM2 commands:"
 echo "   - View logs: pm2 logs"
@@ -205,3 +152,4 @@ echo "   - Configure SSL with Let's Encrypt"
 echo "   - Update CORS settings in backend"
 echo ""
 print_success "Setup script completed successfully!"
+
