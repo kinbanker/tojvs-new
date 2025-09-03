@@ -17,7 +17,8 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-key';
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/tojvs-voice';
+// FIXED: Updated to use external n8n server
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://n8n.sprint.kr/webhook/tojvs-voice';
 
 // Security middleware
 app.use(helmet({
@@ -29,6 +30,8 @@ app.use(helmet({
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: '너무 많은 요청입니다. 잠시 후 다시 시도해주세요.'
 });
 app.use('/api/', limiter);
@@ -37,7 +40,7 @@ app.use('/api/', limiter);
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = NODE_ENV === 'production' 
-      ? ['https://tojvs.com', 'https://www.tojvs.com']
+      ? ['https://tojvs.com', 'https://www.tojvs.com'] // TODO: Update with your domain
       : ['http://localhost:3000', 'http://localhost:3001'];
     
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
@@ -113,15 +116,24 @@ async function initDb() {
       )
     `);
 
+    // Create indexes for better performance
+    await db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_kanban_user ON kanban_cards(user_id);
+      CREATE INDEX IF NOT EXISTS idx_voice_user ON voice_commands(user_id);
+      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    `);
+
     // Insert test account if not exists
     const testUser = await db.get('SELECT * FROM users WHERE username = ?', 'admin');
     if (!testUser) {
-      const testPassword = process.env.TEST_PASSWORD || 'change-this-password';
+      // FIXED: Properly hash the test password
+      const testPassword = process.env.TEST_PASSWORD || 'xptmxm';
+      const hashedTestPassword = await bcrypt.hash(testPassword, 10);
       await db.run(
         'INSERT INTO users (username, password, phone) VALUES (?, ?, ?)',
-        'admin', hashedPassword, '010-0000-0000'
+        'admin', hashedTestPassword, '010-0000-0000'
       );
-      console.log('Test account created: admin/xptmxm');
+      console.log('Test account created: admin/' + testPassword);
     }
 
     console.log('Database initialized successfully');
@@ -210,7 +222,7 @@ app.post('/api/register', asyncHandler(async (req, res) => {
   const hashedPassword = await bcrypt.hash(password, 10);
   const result = await db.run(
     'INSERT INTO users (username, password, phone, marketing_consent) VALUES (?, ?, ?, ?)',
-    username, hashedPassword, phone, marketingConsent ? 1 : 0
+    username, hashedTestPassword, phone, marketingConsent ? 1 : 0
   );
 
   res.json({ success: true, userId: result.lastID });
@@ -502,7 +514,8 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     connections: activeConnections.size,
-    environment: NODE_ENV
+    environment: NODE_ENV,
+    n8nWebhook: N8N_WEBHOOK_URL
   });
 });
 
