@@ -219,7 +219,7 @@ app.post('/api/register', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: '이미 존재하는 ID입니다.' });
   }
 
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashedTestPassword = await bcrypt.hash(password, 10);
   const result = await db.run(
     'INSERT INTO users (username, password, phone, marketing_consent) VALUES (?, ?, ?, ?)',
     username, hashedTestPassword, phone, marketingConsent ? 1 : 0
