@@ -13,6 +13,7 @@ const Login = ({ onLogin }) => {
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
+    console.log('handleSubmit 함수 호출됨');
     e.preventDefault();
     setLoading(true);
 
