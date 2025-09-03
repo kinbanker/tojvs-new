@@ -40,7 +40,7 @@ app.use('/api/', limiter);
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = NODE_ENV === 'production' 
-      ? ['https://tojvs.com', 'https://www.tojvs.com'] // TODO: Update with your domain
+      ? ['https://tojvs.com', 'https://www.tojvs.com', 'http://152.42.162.122:3000'] 
       : ['http://localhost:3000', 'http://localhost:3001'];
     
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
