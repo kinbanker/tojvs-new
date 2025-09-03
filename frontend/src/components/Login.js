@@ -17,7 +17,8 @@ const Login = ({ onLogin }) => {
     setLoading(true);
 
     try {
-      const response = await axios.post('/api/login', formData);
+      const API_URL = process.env.REACT_APP_API_URL || 'http://152.42.162.122:3001/api';
+      const response = await axios.post(`${API_URL}/login`, formData);
       
       if (response.data.success) {
         localStorage.setItem('token', response.data.token);
