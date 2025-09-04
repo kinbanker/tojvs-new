@@ -81,7 +81,9 @@ const VoiceRecorder = ({ onTranscript, className }) => {
             errorMessage = '마이크를 찾을 수 없습니다.';
             break;
           case 'aborted':
-            // User aborted, no need to show error
+            console.log('Speech recognition aborted by user');
+            setIsRecording(false);
+            setError(null);
             return;
           default:
             errorMessage = `음성 인식 오류: ${event.error}`;
@@ -129,7 +131,7 @@ const VoiceRecorder = ({ onTranscript, className }) => {
       }
       clearTimeout(silenceTimerRef.current);
     };
-  }, [onTranscript, isRecording]);
+  }, [onTranscript]);
 
   const startRecording = async () => {
     if (!isSupported || !recognitionRef.current) {
@@ -166,13 +168,13 @@ const VoiceRecorder = ({ onTranscript, className }) => {
   const stopRecording = () => {
     if (recognitionRef.current && isRecording) {
       try {
-        recognitionRef.current.stop();
-        setIsRecording(false);
-        setTranscript('');
         clearTimeout(silenceTimerRef.current);
+        recognitionRef.current.stop();
         console.log('Recording stopped');
+        // 상태는 onend 이벤트에서 처리되도록 함
       } catch (error) {
         console.error('Failed to stop recording:', error);
+        setIsRecording(false); // 오류 시에만 직접 상태 변경
       }
     }
   };
