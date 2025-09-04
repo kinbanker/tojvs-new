@@ -115,10 +115,6 @@ const Login = ({ onLogin }) => {
             회원가입하기
           </Link>
         </div>
-
-        <div className="mt-4 text-center text-sm text-gray-500">
-          테스트 계정: admin / xptmxm
-        </div>
       </div>
     </div>
   );
