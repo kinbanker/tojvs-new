@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_URL || 
   (process.env.NODE_ENV === 'production' 
     ? ''  // 프로덕션: 같은 도메인
-    : 'http://localhost:3001');  // 개발: 로컬 서버
+    : 'http://localhost:3002');  // 개발: 로컬 서버
 
 export const useSocket = (userId) => {
   const [isConnected, setIsConnected] = useState(false);

@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 const API_BASE_URL = process.env.REACT_APP_API_URL || 
   (process.env.NODE_ENV === 'production' 
     ? '/api'  // 프로덕션: 상대 경로 사용
-    : 'http://localhost:3001/api');  // 개발: 절대 경로
+    : 'http://localhost:3002/api');  // 개발: 절대 경로
 
 // Create axios instance
 const api = axios.create({
