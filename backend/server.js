@@ -41,7 +41,7 @@ const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = NODE_ENV === 'production' 
       ? ['https://tojvs.com', 'https://www.tojvs.com', 'http://152.42.162.122:3000'] 
-      : ['http://localhost:3000', 'http://localhost:3001'];
+      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'https://dev.tojvs.com'];
     
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
