@@ -31,7 +31,7 @@ const Login = ({ onLogin }) => {
         navigate('/');
       }
     } catch (error) {
-      toast.error(error.response?.data?.error || '로그인에 실패했습니다.');
+      console.error('Login error:', error);
     } finally {
       setLoading(false);
     }

@@ -84,17 +84,18 @@ api.interceptors.response.use(
         }
       }
 
-      // 🔑 401 오류 처리 개선
+      // 🔑 401 오류 처리 개선 - 기존 코드를 이렇게 변경
       if (status === 401) {
+        const errorMessage = data.error || '인증에 실패했습니다.';
+        
         // 로그인 페이지에서의 401은 로그인 실패
         if (window.location.pathname === '/login') {
-          const errorMessage = data.error || 'ID 또는 비밀번호가 올바르지 않습니다.';
-          toast.error(errorMessage);
+          toast.error(errorMessage, { id: 'login-error' }); // ID로 중복 방지
         } else {
-          // 다른 페이지에서의 401은 세션 만료
+          // 다른 페이지에서의 401은 세션 만료 
           localStorage.clear();
           window.location.href = '/login';
-          toast.error('세션이 만료되었습니다. 다시 로그인해주세요.');
+          toast.error('세션이 만료되었습니다. 다시 로그인해주세요.', { id: 'session-expired' });
         }
       } else if (status === 403) {
         toast.error('권한이 없습니다.');
