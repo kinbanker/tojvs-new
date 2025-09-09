@@ -8,60 +8,135 @@ const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const validator = require('validator');
 require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 
-// Environment variables with defaults
-const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-key';
-const NODE_ENV = process.env.NODE_ENV || 'development';
-// FIXED: Updated to use external n8n server
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://n8n.sprint.kr/webhook/tojvs-voice';
+// Environment validation
+const requiredEnvVars = ['JWT_SECRET', 'NODE_ENV'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+if (missingEnvVars.length > 0) {
+  console.error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
+  process.exit(1);
+}
 
-// Security middleware
+// Environment variables (no defaults for sensitive data)
+const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+const NODE_ENV = process.env.NODE_ENV;
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || '';
+const ALLOWED_DOMAINS = process.env.ALLOWED_DOMAINS ? 
+  process.env.ALLOWED_DOMAINS.split(',').map(d => d.trim()) : [];
+
+// Production check
+const isProduction = NODE_ENV === 'production';
+
+// Allowed origins configuration
+const getAllowedOrigins = () => {
+  const origins = [
+    'http://localhost:3000',
+    'http://localhost:3001'
+  ];
+  
+  // Add custom domains from environment
+  if (ALLOWED_DOMAINS.length > 0) {
+    ALLOWED_DOMAINS.forEach(domain => {
+      origins.push(`http://${domain}`);
+      origins.push(`https://${domain}`);
+    });
+  }
+  
+  // Add server IP if provided
+  if (process.env.SERVER_IP) {
+    origins.push(`http://${process.env.SERVER_IP}`);
+    origins.push(`http://${process.env.SERVER_IP}:3000`);
+    origins.push(`http://${process.env.SERVER_IP}:3001`);
+  }
+  
+  return origins;
+};
+
+// Security middleware with proper CSP
 app.use(helmet({
-  contentSecurityPolicy: false, // Disable for development
+  contentSecurityPolicy: isProduction ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: ["'self'", ...getAllowedOrigins()],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline only if necessary
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: isProduction ? [] : null
+    }
+  } : false,
   crossOriginEmbedderPolicy: false
 }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+// Rate limiting with different limits for different endpoints
+const createRateLimiter = (windowMs, max, message) => rateLimit({
+  windowMs,
+  max,
   standardHeaders: true,
   legacyHeaders: false,
-  message: '너무 많은 요청입니다. 잠시 후 다시 시도해주세요.'
+  message,
+  skip: (req) => !isProduction // Skip in development
 });
-app.use('/api/', limiter);
 
-// CORS configuration
+const apiLimiter = createRateLimiter(15 * 60 * 1000, 100, '너무 많은 요청입니다.');
+const authLimiter = createRateLimiter(15 * 60 * 1000, 5, '너무 많은 인증 시도입니다.');
+const voiceLimiter = createRateLimiter(60 * 1000, 10, '음성 명령 한도를 초과했습니다.');
+
+app.use('/api/', apiLimiter);
+app.use('/api/login', authLimiter);
+app.use('/api/register', authLimiter);
+
+// Unified CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    const allowedOrigins = NODE_ENV === 'production' 
-      ? ['https://tojvs.com', 'https://www.tojvs.com', 'http://152.42.162.122:3000'] 
-      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'https://dev.tojvs.com'];
+    const allowedOrigins = getAllowedOrigins();
     
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    // Allow requests with no origin (e.g., mobile apps, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // Development mode allows all origins
+    if (!isProduction) {
+      return callback(null, true);
+    }
+    
+    // Production mode checks against allowed origins
+    if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      callback(new Error('CORS policy violation'));
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400 // Cache preflight response for 1 day
 };
-app.use(cors(corsOptions));
-app.use(express.json());
 
-// Socket.io setup with error handling
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Socket.io setup with unified CORS
 const io = socketIO(server, {
   cors: corsOptions,
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  transports: ['websocket', 'polling']
 });
 
-// Database setup with error handling
+// Database setup with connection pool simulation
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 
@@ -71,69 +146,84 @@ async function initDb() {
   try {
     db = await open({
       filename: './database.db',
-      driver: sqlite3.Database
+      driver: sqlite3.Database,
+      // SQLite performance optimizations
+      cached: true
     });
 
-    // Users table
+    // Enable foreign keys
+    await db.run('PRAGMA foreign_keys = ON');
+    
+    // Performance optimizations
+    await db.run('PRAGMA journal_mode = WAL');
+    await db.run('PRAGMA synchronous = NORMAL');
+    
+    // Create tables
     await db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE,
         password TEXT NOT NULL,
         phone TEXT,
+        refresh_token TEXT,
         marketing_consent BOOLEAN DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        is_active BOOLEAN DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
-    // Kanban cards table with additional fields
     await db.exec(`
       CREATE TABLE IF NOT EXISTS kanban_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        ticker TEXT NOT NULL,
-        price REAL NOT NULL,
-        quantity INTEGER NOT NULL,
-        column_id TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        ticker TEXT NOT NULL CHECK(length(ticker) <= 10),
+        price REAL NOT NULL CHECK(price >= 0),
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        column_id TEXT NOT NULL CHECK(column_id IN ('buy-wait', 'buy-done', 'sell-wait', 'sell-done')),
         total_value REAL GENERATED ALWAYS AS (price * quantity) STORED,
-        notes TEXT,
+        notes TEXT CHECK(length(notes) <= 500),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )
     `);
 
-    // Voice commands log table
     await db.exec(`
       CREATE TABLE IF NOT EXISTS voice_commands (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        command_text TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        command_text TEXT NOT NULL CHECK(length(command_text) <= 1000),
         intent_type TEXT,
         processed BOOLEAN DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )
     `);
 
-    // Create indexes for better performance
+    // Create indexes
     await db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_kanban_user ON kanban_cards(user_id);
-      CREATE INDEX IF NOT EXISTS idx_voice_user ON voice_commands(user_id);
+      CREATE INDEX IF NOT EXISTS idx_kanban_user_created ON kanban_cards(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_voice_user_created ON voice_commands(user_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
     `);
 
-    // Insert test account if not exists
-    const testUser = await db.get('SELECT * FROM users WHERE username = ?', 'admin');
-    if (!testUser) {
-      // FIXED: Properly hash the test password
-      const testPassword = process.env.TEST_PASSWORD || 'xptmxm';
-      const hashedTestPassword = await bcrypt.hash(testPassword, 10);
-      await db.run(
-        'INSERT INTO users (username, password, phone) VALUES (?, ?, ?)',
-        'admin', hashedTestPassword, '010-0000-0000'
-      );
-      console.log('Test account created: admin/' + testPassword);
+    // Create admin account only in development
+    if (!isProduction && process.env.CREATE_TEST_ACCOUNT === 'true') {
+      const testUser = await db.get('SELECT id FROM users WHERE username = ?', 'admin');
+      if (!testUser) {
+        const testPassword = process.env.TEST_PASSWORD;
+        if (testPassword && testPassword.length >= 8) {
+          const hashedPassword = await bcrypt.hash(testPassword, 12);
+          await db.run(
+            'INSERT INTO users (username, password, phone, email) VALUES (?, ?, ?, ?)',
+            'admin', hashedPassword, '010-0000-0000', 'admin@test.com'
+          );
+          console.log('Development test account created');
+        }
+      }
     }
 
     console.log('Database initialized successfully');
@@ -144,6 +234,58 @@ async function initDb() {
 }
 
 initDb();
+
+// Input validation helpers
+const validateInput = {
+  username: (username) => {
+    return username && 
+           /^[a-zA-Z0-9_]{3,20}$/.test(username);
+  },
+  password: (password) => {
+    return password && 
+           password.length >= 8 && 
+           /[A-Z]/.test(password) && 
+           /[a-z]/.test(password) && 
+           /[0-9]/.test(password);
+  },
+  email: (email) => {
+    return !email || validator.isEmail(email);
+  },
+  phone: (phone) => {
+    return !phone || /^010-\d{4}-\d{4}$/.test(phone);
+  },
+  ticker: (ticker) => {
+    return ticker && /^[A-Z0-9]{1,10}$/.test(ticker.toUpperCase());
+  },
+  price: (price) => {
+    const num = parseFloat(price);
+    return !isNaN(num) && num >= 0 && num <= 1000000;
+  },
+  quantity: (quantity) => {
+    const num = parseInt(quantity);
+    return !isNaN(num) && num > 0 && num <= 1000000;
+  },
+  columnId: (columnId) => {
+    return ['buy-wait', 'buy-done', 'sell-wait', 'sell-done'].includes(columnId);
+  }
+};
+
+// JWT token generation with refresh token
+const generateTokens = (user) => {
+  const accessToken = jwt.sign(
+    { id: user.id, username: user.username },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+  
+  const refreshToken = jwt.sign(
+    { id: user.id, username: user.username, type: 'refresh' },
+    JWT_SECRET,
+    { expiresIn: JWT_REFRESH_EXPIRES_IN }
+  );
+  
+  return { accessToken, refreshToken };
+};
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -156,6 +298,9 @@ const authenticateToken = (req, res, next) => {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: '토큰이 만료되었습니다.', code: 'TOKEN_EXPIRED' });
+      }
       return res.status(403).json({ error: '유효하지 않은 토큰입니다.' });
     }
     req.user = user;
@@ -165,24 +310,20 @@ const authenticateToken = (req, res, next) => {
 
 // Error handling middleware
 const errorHandler = (err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('Error:', err.message);
   
-  if (err.message === 'CORS policy violation') {
-    return res.status(403).json({ error: 'CORS 정책 위반' });
+  // Don't leak error details in production
+  if (isProduction) {
+    if (err.message === 'Not allowed by CORS') {
+      return res.status(403).json({ error: '접근이 거부되었습니다.' });
+    }
+    return res.status(500).json({ error: '서버 오류가 발생했습니다.' });
   }
   
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({ error: err.message });
-  }
-  
-  if (err.name === 'UnauthorizedError') {
-    return res.status(401).json({ error: '인증 실패' });
-  }
-  
-  res.status(500).json({ 
-    error: NODE_ENV === 'production' 
-      ? '서버 오류가 발생했습니다.' 
-      : err.message 
+  // Development mode - show full error
+  res.status(err.status || 500).json({ 
+    error: err.message,
+    stack: err.stack
   });
 };
 
@@ -193,42 +334,58 @@ const asyncHandler = (fn) => (req, res, next) => {
 
 // REST API Routes
 
-// Register
+// Register with proper validation
 app.post('/api/register', asyncHandler(async (req, res) => {
-  const { username, password, phone, marketingConsent } = req.body;
+  const { username, password, phone, email, marketingConsent } = req.body;
 
-  // Validation
-  if (!username || !password || !phone) {
-    return res.status(400).json({ error: '모든 필수 항목을 입력해주세요.' });
+  // Comprehensive validation
+  if (!validateInput.username(username)) {
+    return res.status(400).json({ 
+      error: 'ID는 3-20자의 영문자, 숫자, 언더스코어만 사용 가능합니다.' 
+    });
   }
 
-  if (!/^[a-zA-Z]+$/.test(username)) {
-    return res.status(400).json({ error: 'ID는 영문자만 사용 가능합니다.' });
+  if (!validateInput.password(password)) {
+    return res.status(400).json({ 
+      error: '비밀번호는 8자 이상이며 대문자, 소문자, 숫자를 포함해야 합니다.' 
+    });
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ error: '비밀번호는 8자 이상이어야 합니다.' });
+  if (phone && !validateInput.phone(phone)) {
+    return res.status(400).json({ 
+      error: '올바른 휴대폰 번호 형식이 아닙니다. (010-XXXX-XXXX)' 
+    });
   }
 
-  if (!/^010-\d{4}-\d{4}$/.test(phone)) {
-    return res.status(400).json({ error: '올바른 휴대폰 번호 형식이 아닙니다.' });
+  if (email && !validateInput.email(email)) {
+    return res.status(400).json({ 
+      error: '올바른 이메일 형식이 아닙니다.' 
+    });
   }
 
-  const existingUser = await db.get('SELECT * FROM users WHERE username = ?', username);
+  // Check existing user
+  const existingUser = await db.get(
+    'SELECT id FROM users WHERE username = ? OR email = ?', 
+    username, email
+  );
+  
   if (existingUser) {
-    return res.status(400).json({ error: '이미 존재하는 ID입니다.' });
+    return res.status(400).json({ error: '이미 존재하는 사용자입니다.' });
   }
 
-  const hashedTestPassword = await bcrypt.hash(password, 10);
+  // Hash password with higher cost factor
+  const hashedPassword = await bcrypt.hash(password, 12);
+  
   const result = await db.run(
-    'INSERT INTO users (username, password, phone, marketing_consent) VALUES (?, ?, ?, ?)',
-    username, hashedTestPassword, phone, marketingConsent ? 1 : 0
+    `INSERT INTO users (username, password, phone, email, marketing_consent) 
+     VALUES (?, ?, ?, ?, ?)`,
+    username, hashedPassword, phone, email, marketingConsent ? 1 : 0
   );
 
   res.json({ success: true, userId: result.lastID });
 }));
 
-// Login
+// Login with refresh token
 app.post('/api/login', asyncHandler(async (req, res) => {
   const { username, password } = req.body;
 
@@ -236,33 +393,87 @@ app.post('/api/login', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'ID와 비밀번호를 입력해주세요.' });
   }
 
-  const user = await db.get('SELECT * FROM users WHERE username = ?', username);
+  const user = await db.get(
+    'SELECT id, username, password, email, phone, is_active FROM users WHERE username = ? OR email = ?',
+    username, username
+  );
   
-  if (!user || !(await bcrypt.compare(password, user.password))) {
+  if (!user || !user.is_active) {
+    return res.status(401).json({ error: '계정을 찾을 수 없습니다.' });
+  }
+  
+  const validPassword = await bcrypt.compare(password, user.password);
+  if (!validPassword) {
     return res.status(401).json({ error: 'ID 또는 비밀번호가 올바르지 않습니다.' });
   }
 
-  const token = jwt.sign(
-    { id: user.id, username: user.username },
-    JWT_SECRET,
-    { expiresIn: '24h' }
+  const { accessToken, refreshToken } = generateTokens(user);
+  
+  // Save refresh token
+  await db.run(
+    'UPDATE users SET refresh_token = ? WHERE id = ?',
+    refreshToken, user.id
   );
 
   res.json({
     success: true,
-    token,
+    accessToken,
+    refreshToken,
     user: {
       id: user.id,
       username: user.username,
+      email: user.email,
       phone: user.phone
     }
   });
 }));
 
-// Get user profile
+// Refresh token endpoint
+app.post('/api/refresh', asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  
+  if (!refreshToken) {
+    return res.status(401).json({ error: '리프레시 토큰이 필요합니다.' });
+  }
+  
+  jwt.verify(refreshToken, JWT_SECRET, async (err, decoded) => {
+    if (err || decoded.type !== 'refresh') {
+      return res.status(403).json({ error: '유효하지 않은 리프레시 토큰입니다.' });
+    }
+    
+    const user = await db.get(
+      'SELECT id, username, refresh_token FROM users WHERE id = ? AND refresh_token = ?',
+      decoded.id, refreshToken
+    );
+    
+    if (!user) {
+      return res.status(403).json({ error: '토큰이 만료되었거나 유효하지 않습니다.' });
+    }
+    
+    const tokens = generateTokens(user);
+    
+    await db.run(
+      'UPDATE users SET refresh_token = ? WHERE id = ?',
+      tokens.refreshToken, user.id
+    );
+    
+    res.json(tokens);
+  });
+}));
+
+// Logout
+app.post('/api/logout', authenticateToken, asyncHandler(async (req, res) => {
+  await db.run(
+    'UPDATE users SET refresh_token = NULL WHERE id = ?',
+    req.user.id
+  );
+  res.json({ success: true });
+}));
+
+// Get profile (optimized query)
 app.get('/api/profile', authenticateToken, asyncHandler(async (req, res) => {
   const user = await db.get(
-    'SELECT id, username, phone, created_at FROM users WHERE id = ?',
+    'SELECT id, username, email, phone, created_at FROM users WHERE id = ?',
     req.user.id
   );
   
@@ -273,85 +484,86 @@ app.get('/api/profile', authenticateToken, asyncHandler(async (req, res) => {
   res.json(user);
 }));
 
-// Get kanban cards
+// Kanban CRUD with validation
 app.get('/api/kanban', authenticateToken, asyncHandler(async (req, res) => {
+  const { page = 1, limit = 50 } = req.query;
+  const offset = (page - 1) * limit;
+  
   const cards = await db.all(
-    'SELECT * FROM kanban_cards WHERE user_id = ? ORDER BY created_at DESC',
+    `SELECT id, ticker, price, quantity, column_id, notes, created_at, updated_at, total_value 
+     FROM kanban_cards 
+     WHERE user_id = ? 
+     ORDER BY created_at DESC 
+     LIMIT ? OFFSET ?`,
+    req.user.id, limit, offset
+  );
+  
+  const total = await db.get(
+    'SELECT COUNT(*) as count FROM kanban_cards WHERE user_id = ?',
     req.user.id
   );
-  res.json(cards || []);
+  
+  res.json({
+    cards: cards || [],
+    total: total.count,
+    page: parseInt(page),
+    limit: parseInt(limit)
+  });
 }));
 
-// Add kanban card
 app.post('/api/kanban', authenticateToken, asyncHandler(async (req, res) => {
   const { ticker, price, quantity, column_id, notes } = req.body;
   
-  if (!ticker || !price || !quantity || !column_id) {
-    return res.status(400).json({ error: '필수 정보를 입력해주세요.' });
+  // Strict validation
+  if (!validateInput.ticker(ticker)) {
+    return res.status(400).json({ error: '유효하지 않은 종목 코드입니다.' });
+  }
+  
+  if (!validateInput.price(price)) {
+    return res.status(400).json({ error: '유효하지 않은 가격입니다.' });
+  }
+  
+  if (!validateInput.quantity(quantity)) {
+    return res.status(400).json({ error: '유효하지 않은 수량입니다.' });
+  }
+  
+  if (!validateInput.columnId(column_id)) {
+    return res.status(400).json({ error: '유효하지 않은 상태입니다.' });
+  }
+  
+  if (notes && notes.length > 500) {
+    return res.status(400).json({ error: '메모는 500자 이내로 작성해주세요.' });
   }
   
   const result = await db.run(
-    'INSERT INTO kanban_cards (user_id, ticker, price, quantity, column_id, notes) VALUES (?, ?, ?, ?, ?, ?)',
-    req.user.id, ticker, price, quantity, column_id, notes || ''
+    `INSERT INTO kanban_cards (user_id, ticker, price, quantity, column_id, notes) 
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    req.user.id, ticker.toUpperCase(), price, quantity, column_id, notes || ''
   );
   
-  const card = await db.get('SELECT * FROM kanban_cards WHERE id = ?', result.lastID);
+  const card = await db.get(
+    `SELECT id, ticker, price, quantity, column_id, notes, created_at, total_value 
+     FROM kanban_cards WHERE id = ?`,
+    result.lastID
+  );
+  
   res.json(card);
 }));
 
-// Update kanban card
-app.put('/api/kanban/:id', authenticateToken, asyncHandler(async (req, res) => {
-  const { column_id } = req.body;
-  const { id } = req.params;
-  
-  await db.run(
-    'UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?',
-    column_id, id, req.user.id
-  );
-  
-  res.json({ success: true });
-}));
-
-// Delete kanban card
-app.delete('/api/kanban/:id', authenticateToken, asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  
-  await db.run(
-    'DELETE FROM kanban_cards WHERE id = ? AND user_id = ?',
-    id, req.user.id
-  );
-  
-  res.json({ success: true });
-}));
-
-// Mock stock data endpoint (for MVP without Polygon.io)
-app.get('/api/stocks/:ticker', authenticateToken, asyncHandler(async (req, res) => {
-  const { ticker } = req.params;
-  
-  // Mock data for MVP
-  const mockData = {
-    ticker: ticker.toUpperCase(),
-    price: (Math.random() * 100 + 10).toFixed(2),
-    change: (Math.random() * 10 - 5).toFixed(2),
-    changePercent: (Math.random() * 5 - 2.5).toFixed(2),
-    volume: Math.floor(Math.random() * 1000000),
-    timestamp: new Date().toISOString()
-  };
-  
-  res.json(mockData);
-}));
-
-// WebSocket handling with error handling
-const activeConnections = new Map();
+// WebSocket handling with rate limiting
+const voiceCommandLimiter = new Map();
 
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
+  
   if (!token) {
-    return next(new Error('Authentication error'));
+    return next(new Error('Authentication required'));
   }
 
   jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) return next(new Error('Authentication error'));
+    if (err) {
+      return next(new Error('Invalid token'));
+    }
     socket.userId = decoded.id;
     socket.username = decoded.username;
     next();
@@ -359,170 +571,119 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  console.log(`User ${socket.username} connected (${socket.id})`);
-  activeConnections.set(socket.id, {
-    userId: socket.userId,
-    username: socket.username,
-    connectedAt: new Date()
-  });
+  console.log(`User ${socket.username} connected`);
 
-  // Send connection success
   socket.emit('connected', { 
     message: '연결되었습니다.',
     userId: socket.userId 
   });
 
-  // Handle voice command
+  // Voice command with rate limiting
   socket.on('voice-command', async (data) => {
     const { text } = data;
+    
+    // Rate limiting check
+    const now = Date.now();
+    const userLimiter = voiceCommandLimiter.get(socket.userId) || { count: 0, resetTime: now + 60000 };
+    
+    if (now > userLimiter.resetTime) {
+      userLimiter.count = 0;
+      userLimiter.resetTime = now + 60000;
+    }
+    
+    if (userLimiter.count >= 10) {
+      return socket.emit('error', { 
+        message: '너무 많은 요청입니다. 잠시 후 다시 시도해주세요.',
+        code: 'RATE_LIMIT'
+      });
+    }
+    
+    userLimiter.count++;
+    voiceCommandLimiter.set(socket.userId, userLimiter);
+    
+    // Validate input
+    if (!text || text.length > 1000) {
+      return socket.emit('error', { 
+        message: '유효하지 않은 명령입니다.' 
+      });
+    }
+    
     console.log(`Voice command from ${socket.username}: ${text}`);
 
     try {
-      // Log voice command to database
+      // Save to database
       await db.run(
         'INSERT INTO voice_commands (user_id, command_text) VALUES (?, ?)',
         socket.userId, text
       );
 
-      // Send to n8n for processing
-      const n8nResponse = await axios.post(N8N_WEBHOOK_URL, {
-        text,
-        userId: socket.userId,
-        username: socket.username,
-        socketId: socket.id,
-        timestamp: new Date().toISOString()
-      }, {
-        timeout: 10000 // 10 second timeout
-      });
+      // Process with n8n if configured
+      if (N8N_WEBHOOK_URL) {
+        try {
+          await axios.post(N8N_WEBHOOK_URL, {
+            text,
+            userId: socket.userId,
+            username: socket.username,
+            socketId: socket.id,
+            timestamp: new Date().toISOString()
+          }, {
+            timeout: 10000,
+            headers: { 'Content-Type': 'application/json' }
+          });
 
-      // Send processing status
-      socket.emit('processing', { 
-        status: 'analyzing', 
-        message: '명령을 처리하고 있습니다...' 
-      });
-
-    } catch (error) {
-      console.error('n8n webhook error:', error.message);
-      
-      // Fallback: Process locally for basic commands
-      const lowerText = text.toLowerCase();
-      
-      if (lowerText.includes('매수') || lowerText.includes('매도')) {
-        // Extract basic trading info using regex
-        const tickerMatch = text.match(/([A-Z]+)/);
-        const priceMatch = text.match(/(\d+\.?\d*)/);
-        const quantityMatch = text.match(/(\d+)주/);
-        
-        if (tickerMatch && priceMatch) {
-          const card = {
-            ticker: tickerMatch[1],
-            price: parseFloat(priceMatch[1]),
-            quantity: quantityMatch ? parseInt(quantityMatch[1]) : 100,
-            column: lowerText.includes('매수') ? 'buy-wait' : 'sell-wait'
-          };
-          
+          socket.emit('processing', { 
+            status: 'analyzing', 
+            message: '명령을 처리하고 있습니다...' 
+          });
+        } catch (error) {
+          console.error('n8n webhook error:', error.message);
+          // Provide meaningful fallback
           socket.emit('command-result', {
-            type: 'kanban',
+            type: 'fallback',
             data: {
-              action: 'ADD_CARD',
-              card
+              message: '명령을 처리할 수 없습니다. 다시 시도해주세요.',
+              originalText: text
             },
             timestamp: new Date().toISOString()
           });
         }
       } else {
-        socket.emit('error', { 
-          message: 'n8n 서비스에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.' 
+        // No n8n configured
+        socket.emit('command-result', {
+          type: 'error',
+          data: {
+            message: '음성 처리 서비스가 설정되지 않았습니다.',
+            originalText: text
+          },
+          timestamp: new Date().toISOString()
         });
       }
-    }
-  });
-
-  // Handle kanban card movement
-  socket.on('move-card', async (data) => {
-    const { cardId, fromColumn, toColumn } = data;
-    
-    try {
-      await db.run(
-        'UPDATE kanban_cards SET column_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?',
-        toColumn, cardId, socket.userId
-      );
-
-      // Broadcast to all user's connections
-      io.emit('kanban-update', {
-        type: 'MOVE',
-        cardId,
-        fromColumn,
-        toColumn,
-        userId: socket.userId
-      });
     } catch (error) {
-      console.error('Move card error:', error);
-      socket.emit('error', { message: '카드 이동 중 오류가 발생했습니다.' });
+      console.error('Voice command error:', error);
+      socket.emit('error', { 
+        message: '명령 처리 중 오류가 발생했습니다.' 
+      });
     }
   });
 
-  // Handle disconnection
-  socket.on('disconnect', (reason) => {
-    console.log(`User ${socket.username} disconnected (${reason})`);
-    activeConnections.delete(socket.id);
-  });
-
-  // Handle errors
-  socket.on('error', (error) => {
-    console.error(`Socket error for ${socket.username}:`, error);
+  socket.on('disconnect', () => {
+    console.log(`User ${socket.username} disconnected`);
   });
 });
-
-// n8n webhook endpoint for results
-app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
-  const { socketId, type, data } = req.body;
-  
-  const socket = io.sockets.sockets.get(socketId);
-  if (socket) {
-    // Handle different result types
-    if (type === 'kanban' && data.action === 'ADD_CARD') {
-      // Save to database
-      const result = await db.run(
-        'INSERT INTO kanban_cards (user_id, ticker, price, quantity, column_id) VALUES (?, ?, ?, ?, ?)',
-        socket.userId, data.card.ticker, data.card.price, data.card.quantity, data.card.column
-      );
-      
-      data.card.id = result.lastID;
-      
-      // Update voice command as processed
-      await db.run(
-        'UPDATE voice_commands SET processed = 1, intent_type = ? WHERE user_id = ? AND processed = 0 ORDER BY created_at DESC LIMIT 1',
-        'ADD_TRADE', socket.userId
-      );
-    }
-
-    // Send to client
-    socket.emit('command-result', {
-      type,
-      data,
-      timestamp: new Date().toISOString()
-    });
-  }
-  
-  res.json({ success: true });
-}));
 
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    connections: activeConnections.size,
     environment: NODE_ENV,
-    n8nWebhook: N8N_WEBHOOK_URL
+    version: process.env.APP_VERSION || '1.0.0'
   });
 });
 
 // Serve static files in production
-if (NODE_ENV === 'production') {
+if (isProduction) {
   app.use(express.static(path.join(__dirname, '../frontend/build')));
-  
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../frontend/build', 'index.html'));
   });
@@ -533,11 +694,10 @@ app.use(errorHandler);
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
+  console.log('SIGTERM received: closing server');
   server.close(() => {
-    console.log('HTTP server closed');
     db.close(() => {
-      console.log('Database connection closed');
+      console.log('Server closed');
       process.exit(0);
     });
   });
@@ -545,15 +705,5 @@ process.on('SIGTERM', () => {
 
 // Start server
 server.listen(PORT, () => {
-  console.log(`
-  ========================================
-  🚀 tojvs Backend Server Started
-  ========================================
-  Environment: ${NODE_ENV}
-  Port: ${PORT}
-  Database: SQLite
-  WebSocket: Enabled
-  n8n Webhook: ${N8N_WEBHOOK_URL}
-  ========================================
-  `);
+  console.log(`Server running on port ${PORT} in ${NODE_ENV} mode`);
 });

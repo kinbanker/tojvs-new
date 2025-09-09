@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import toast from 'react-hot-toast';
 import { TrendingUp, User, Lock, Phone, ChevronLeft } from 'lucide-react';
+import apiUtils from '../utils/api'; // ✅ axios 대신 apiUtils 사용
 
 const Register = () => {
   const [formData, setFormData] = useState({
@@ -52,14 +52,13 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     setLoading(true);
 
     try {
-      const response = await axios.post('/api/register', {
+      // ✅ apiUtils.register 사용
+      const response = await apiUtils.register({
         username: formData.username,
         password: formData.password,
         phone: formData.phone,
@@ -83,7 +82,6 @@ const Register = () => {
       ...formData,
       [name]: type === 'checkbox' ? checked : value
     });
-    // Clear error when user starts typing
     if (errors[name]) {
       setErrors({ ...errors, [name]: '' });
     }
@@ -117,6 +115,7 @@ const Register = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* 아이디 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               아이디 *
@@ -138,6 +137,7 @@ const Register = () => {
             {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username}</p>}
           </div>
 
+          {/* 비밀번호 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               비밀번호 *
@@ -159,6 +159,7 @@ const Register = () => {
             {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password}</p>}
           </div>
 
+          {/* 비밀번호 확인 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               비밀번호 확인 *
@@ -180,6 +181,7 @@ const Register = () => {
             {errors.passwordConfirm && <p className="text-red-500 text-xs mt-1">{errors.passwordConfirm}</p>}
           </div>
 
+          {/* 휴대폰 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               휴대폰 번호 *
@@ -202,6 +204,7 @@ const Register = () => {
             {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone}</p>}
           </div>
 
+          {/* 약관 동의 */}
           <div className="space-y-3 pt-2">
             <div className="flex items-center">
               <input
@@ -233,6 +236,7 @@ const Register = () => {
             </div>
           </div>
 
+          {/* 제출 버튼 */}
           <button
             type="submit"
             disabled={loading}
@@ -253,4 +257,4 @@ const Register = () => {
   );
 };
 
-export default Register; 
+export default Register;

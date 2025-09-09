@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
-import axios from 'axios';
+import apiUtils from '../utils/api'; // ✅ axios 대신 apiUtils 사용
 
 const KanbanBoard = ({ socket }) => {
   const [columns, setColumns] = useState({
@@ -32,12 +32,10 @@ const KanbanBoard = ({ socket }) => {
     };
   }, [socket]);
 
+  // ✅ 서버에서 카드 불러오기
   const loadCards = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get('/api/kanban', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const response = await apiUtils.getKanbanCards();
       
       const cardsByColumn = {
         'buy-wait': [],

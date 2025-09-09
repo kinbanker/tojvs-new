@@ -1,11 +1,8 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import toast from 'react-hot-toast';
 import { TrendingUp, Lock, User } from 'lucide-react';
-
-console.log('Login 컴포넌트 렌더링됨');
-
+import apiUtils from '../utils/api'; // ✅ api.js 사용하도록 수정
 
 const Login = ({ onLogin }) => {
   const [formData, setFormData] = useState({
@@ -16,17 +13,19 @@ const Login = ({ onLogin }) => {
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
-    console.log('handleSubmit 함수 호출됨');
     e.preventDefault();
     setLoading(true);
 
     try {
-      const API_URL = process.env.REACT_APP_API_URL || 'http://152.42.162.122:3002/api';
-      const response = await axios.post(`${API_URL}/login`, formData);
-      
+      // ✅ api.js에 정의된 login 메서드 사용
+      const response = await apiUtils.login(formData);
+
       if (response.data.success) {
-        localStorage.setItem('token', response.data.token);
+        // ✅ accessToken + refreshToken 모두 저장
+        localStorage.setItem('token', response.data.accessToken);
+        localStorage.setItem('refreshToken', response.data.refreshToken);
         localStorage.setItem('user', JSON.stringify(response.data.user));
+
         toast.success('로그인 성공!');
         onLogin();
         navigate('/');

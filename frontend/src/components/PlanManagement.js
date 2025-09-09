@@ -1,9 +1,14 @@
-import React, { useState } from 'react';
-import { Check, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Check, X, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import apiUtils from '../utils/api'; // ✅ For fetching profile (plan info)
 
 const PlanManagement = () => {
   const [currentPlan, setCurrentPlan] = useState('free');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
+  // Static plans data (backend doesn't provide dynamic plans endpoint)
   const plans = [
     {
       id: 'free',
@@ -56,6 +61,50 @@ const PlanManagement = () => {
     }
   ];
 
+  useEffect(() => {
+    const fetchCurrentPlan = async () => {
+      try {
+        // Fetch from /api/profile (as in Profile.js), assuming user.plan field
+        const response = await apiUtils.getProfile();
+        setCurrentPlan(response.data.plan || 'free'); // Fallback to 'free' if not set
+      } catch (error) {
+        console.error('Failed to fetch profile for plan:', error);
+        setError('플랜 정보를 불러오지 못했습니다.');
+        toast.error(error.response?.data?.error || '프로필 정보를 불러오지 못했습니다.');
+        setCurrentPlan('free'); // Fallback
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchCurrentPlan();
+  }, []);
+
+  const handleUpgrade = (planId) => {
+    if (planId === currentPlan) return;
+
+    // No backend /plans/upgrade endpoint; placeholder for future (e.g., redirect to billing)
+    toast.info(`업그레이드 기능은 준비 중입니다. ${planId.toUpperCase()} 플랜으로 변경하려면 관리자에게 문의하세요.`);
+    // Future: window.open('https://billing-link.com/upgrade', '_blank');
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-10">
+        <Loader2 className="w-6 h-6 animate-spin text-blue-600 mr-2" />
+        <span className="text-gray-600">플랜 정보 불러오는 중...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-10 text-red-500">
+        {error}
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto">
       <div className="mb-8">
@@ -95,6 +144,7 @@ const PlanManagement = () => {
             </div>
 
             <button
+              onClick={() => handleUpgrade(plan.id)}
               className={`w-full py-2 px-4 rounded-lg font-medium transition ${
                 currentPlan === plan.id
                   ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
@@ -102,7 +152,7 @@ const PlanManagement = () => {
               }`}
               disabled={currentPlan === plan.id}
             >
-              {currentPlan === plan.id ? '현재 플랜' : '업그레이드'}
+              {currentPlan === plan.id ? '현재 플랜' : '업그레이드 (준비 중)'}
             </button>
           </div>
         ))}

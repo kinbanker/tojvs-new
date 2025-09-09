@@ -9,6 +9,7 @@ import KanbanBoard from './KanbanBoard';
 import NewsDisplay from './NewsDisplay';
 import PlanManagement from './PlanManagement';
 import Profile from './Profile';
+import apiUtils from '../utils/api'; // ✅ 추가
 
 const Dashboard = ({ onLogout }) => {
   const [activeMenu, setActiveMenu] = useState('home');
@@ -63,11 +64,17 @@ const Dashboard = ({ onLogout }) => {
     sendVoiceCommand(text);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    toast.success('로그아웃 되었습니다.');
-    onLogout();
+  // ✅ 로그아웃 개선: 서버 API 호출 → 로컬스토리지 정리
+  const handleLogout = async () => {
+    try {
+      await apiUtils.logout(); // 서버에 refreshToken 무효화 요청
+    } catch (error) {
+      console.warn('서버 로그아웃 실패 (무시 가능):', error);
+    } finally {
+      localStorage.clear();
+      toast.success('로그아웃 되었습니다.');
+      onLogout();
+    }
   };
 
   const renderMainContent = () => {
@@ -79,7 +86,6 @@ const Dashboard = ({ onLogout }) => {
       return <Profile user={user} />;
     }
 
-    // Home content with dynamic views
     return (
       <AnimatePresence mode="wait">
         {currentView === 'welcome' && (
