@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Home, CreditCard, User, LogOut, TrendingUp } from 'lucide-react';
+import { Home, CreditCard, User, LogOut, TrendingUp, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useSocket } from '../hooks/useSocket';
 import VoiceRecorder from './VoiceRecorder';
@@ -18,7 +18,7 @@ const Dashboard = ({ onLogout }) => {
   const [loading, setLoading] = useState(false);
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
+  const { isConnected, lastMessage, sendVoiceCommand, socket, reconnect, connectionError } = useSocket(user.id);
 
   useEffect(() => {
     if (lastMessage) {
@@ -59,8 +59,17 @@ const Dashboard = ({ onLogout }) => {
   };
 
   const handleVoiceInput = (text) => {
+    if (!isConnected) {
+      toast.error('서버 연결이 끊겼습니다. 재연결을 시도해주세요.');
+      return;
+    }
     addMessage(text, 'user');
     sendVoiceCommand(text);
+  };
+
+  const handleReconnect = () => {
+    toast.loading('서버에 재연결 중...');
+    reconnect();
   };
 
   const handleLogout = () => {
@@ -69,6 +78,74 @@ const Dashboard = ({ onLogout }) => {
     toast.success('로그아웃 되었습니다.');
     onLogout();
   };
+
+  // Connection Status Component
+  const ConnectionStatus = () => (
+    <div className="bg-white border-b border-gray-200 px-4 py-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <div className="flex items-center">
+            <span className="text-sm font-medium mr-2">Hook Socket:</span>
+            {isConnected ? (
+              <span className="flex items-center text-green-600">
+                <CheckCircle className="w-4 h-4 mr-1" />
+                연결됨
+              </span>
+            ) : (
+              <span className="flex items-center text-red-600">
+                <XCircle className="w-4 h-4 mr-1" />
+                연결 끊김
+              </span>
+            )}
+          </div>
+          
+          <div className="flex items-center">
+            <span className="text-sm font-medium mr-2">Custom Socket:</span>
+            {socket && socket.connected ? (
+              <span className="flex items-center text-green-600">
+                <CheckCircle className="w-4 h-4 mr-1" />
+                연결됨
+              </span>
+            ) : (
+              <span className="flex items-center text-red-600">
+                <XCircle className="w-4 h-4 mr-1" />
+                연결 끊김
+              </span>
+            )}
+          </div>
+        </div>
+        
+        <div className="flex items-center space-x-3 text-xs text-gray-600">
+          <span>연결정보</span>
+          <span>•</span>
+          <span>토큰 존재: {localStorage.getItem('token') ? '✓' : '✗'}</span>
+          <span>•</span>
+          <span>사용자 ID: {user.id || 'N/A'}</span>
+          {socket && socket.id && (
+            <>
+              <span>•</span>
+              <span>소켓 ID: {socket.id.substring(0, 8)}...</span>
+            </>
+          )}
+        </div>
+      </div>
+      
+      {connectionError && (
+        <div className="mt-2 flex items-center justify-between bg-red-50 px-3 py-2 rounded">
+          <div className="flex items-center text-red-600 text-sm">
+            <AlertCircle className="w-4 h-4 mr-2" />
+            <span>{connectionError}</span>
+          </div>
+          <button
+            onClick={handleReconnect}
+            className="text-sm text-red-600 hover:text-red-700 underline"
+          >
+            재연결 시도
+          </button>
+        </div>
+      )}
+    </div>
+  );
 
   const renderMainContent = () => {
     if (activeMenu === 'plan') {
@@ -108,6 +185,21 @@ const Dashboard = ({ onLogout }) => {
                   <p className="text-gray-600">• "나스닥 현재 지수 알려줘"</p>
                 </div>
               </div>
+              
+              {!isConnected && (
+                <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg max-w-lg mx-auto">
+                  <div className="flex items-center text-yellow-700">
+                    <AlertCircle className="w-5 h-5 mr-2" />
+                    <span>서버 연결이 끊겼습니다. 음성 명령을 사용하려면 재연결이 필요합니다.</span>
+                  </div>
+                  <button
+                    onClick={handleReconnect}
+                    className="mt-3 px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 transition"
+                  >
+                    재연결 시도
+                  </button>
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -153,16 +245,25 @@ const Dashboard = ({ onLogout }) => {
           </div>
         </div>
         
-        <ChatPanel messages={messages} className="flex-1 overflow-y-auto" />
+        <ChatPanel 
+          messages={messages} 
+          className="flex-1 overflow-y-auto"
+          isConnected={isConnected}
+        />
         
         <VoiceRecorder 
           onTranscript={handleVoiceInput}
           className="border-t bg-gray-50"
+          isConnected={isConnected}
+          onReconnect={handleReconnect}
         />
       </div>
       
       {/* Right Main Content */}
       <div className="flex-1 flex flex-col">
+        {/* Connection Status Bar */}
+        <ConnectionStatus />
+        
         {/* Header */}
         <header className="bg-white border-b border-gray-200 px-6 py-4">
           <div className="flex items-center justify-between">
