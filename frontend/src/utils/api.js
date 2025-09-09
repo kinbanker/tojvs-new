@@ -84,11 +84,18 @@ api.interceptors.response.use(
         }
       }
 
-      // 🔑 다른 401 → 로그아웃 처리
+      // 🔑 401 오류 처리 개선
       if (status === 401) {
-        localStorage.clear();
-        window.location.href = '/login';
-        toast.error('세션이 만료되었습니다. 다시 로그인해주세요.');
+        // 로그인 페이지에서의 401은 로그인 실패
+        if (window.location.pathname === '/login') {
+          const errorMessage = data.error || 'ID 또는 비밀번호가 올바르지 않습니다.';
+          toast.error(errorMessage);
+        } else {
+          // 다른 페이지에서의 401은 세션 만료
+          localStorage.clear();
+          window.location.href = '/login';
+          toast.error('세션이 만료되었습니다. 다시 로그인해주세요.');
+        }
       } else if (status === 403) {
         toast.error('권한이 없습니다.');
       } else if (status === 404) {

@@ -28,7 +28,17 @@ function App() {
 
   return (
     <Router>
-      <Toaster position="top-right" />
+      // 수정 (3초로 연장)
+      <Toaster 
+        toastOptions={{
+          duration: 3000, // 5초
+          error: {
+            duration: 5000, // 에러는 5초
+          },
+          success: {
+            duration: 4000, // 성공은 4초
+          }
+        }}
       <Routes>
         <Route 
           path="/login" 
