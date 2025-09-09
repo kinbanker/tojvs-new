@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import { ExternalLink, Calendar, User, Loader2 } from 'lucide-react';
-import toast from 'react-hot-toast';
 
 const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = null }) => {
   // Memoize newsData to prevent unnecessary re-renders

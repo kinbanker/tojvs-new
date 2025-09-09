@@ -30,29 +30,46 @@ const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 const NODE_ENV = process.env.NODE_ENV;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || '';
 const ALLOWED_DOMAINS = process.env.ALLOWED_DOMAINS ? 
-  process.env.ALLOWED_DOMAINS.split(',').map(d => d.trim()) : [];
+  process.env.ALLOWED_DOMAINS.split(',').map(d => d.trim()) : 
+  ['tojvs.com', 'www.tojvs.com', 'dev.tojvs.com']; // 기본값 설정
 
 // Production check
 const isProduction = NODE_ENV === 'production';
 
-// Allowed origins configuration
+// Allowed origins configuration - 수정된 버전
 const getAllowedOrigins = () => {
   const origins = [
     'http://localhost:3000',
-    'http://localhost:3001'
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001'
   ];
   
   // Add custom domains from environment
-  if (ALLOWED_DOMAINS.length > 0) {
+  if (ALLOWED_DOMAINS && ALLOWED_DOMAINS.length > 0) {
     ALLOWED_DOMAINS.forEach(domain => {
+      // HTTP와 HTTPS 모두 추가
       origins.push(`http://${domain}`);
       origins.push(`https://${domain}`);
+      
+      // www 서브도메인 자동 추가 (이미 www가 아닌 경우)
+      if (!domain.startsWith('www.')) {
+        origins.push(`http://www.${domain}`);
+        origins.push(`https://www.${domain}`);
+      }
+      
+      // dev 서브도메인 추가 (메인 도메인인 경우)
+      if (!domain.includes('.') || domain.split('.').length === 2) {
+        origins.push(`http://dev.${domain}`);
+        origins.push(`https://dev.${domain}`);
+      }
     });
   }
   
   // Add server IP if provided
   if (process.env.SERVER_IP) {
     origins.push(`http://${process.env.SERVER_IP}`);
+    origins.push(`https://${process.env.SERVER_IP}`);
     origins.push(`http://${process.env.SERVER_IP}:3000`);
     origins.push(`http://${process.env.SERVER_IP}:3001`);
   }
@@ -100,45 +117,87 @@ const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = getAllowedOrigins();
     
-    // Allow requests with no origin (e.g., mobile apps, Postman)
+    // origin이 없는 경우 (같은 도메인, Postman, 서버 간 통신 등)
     if (!origin) {
       return callback(null, true);
     }
     
-    // Development mode allows all origins
-    if (!isProduction) {
+    // 개발 환경에서는 모든 origin 허용
+    if (NODE_ENV === 'development') {
       return callback(null, true);
     }
     
-    // Production mode checks against allowed origins
+    // 프로덕션에서는 허용 목록 확인
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       console.warn(`CORS blocked origin: ${origin}`);
+      console.log('Allowed origins:', allowedOrigins); // 디버깅용
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  maxAge: 86400 // Cache preflight response for 1 day
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400 // 24시간 캐시
 };
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Socket.io setup with unified CORS
+// Socket.io 설정 개선
 const io = socketIO(server, {
-  cors: corsOptions,
+  cors: {
+    origin: function(origin, callback) {
+      // Socket.IO를 위한 별도 CORS 처리
+      const allowedOrigins = getAllowedOrigins();
+      
+      if (!origin || NODE_ENV === 'development') {
+        return callback(null, true);
+      }
+      
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        console.warn(`Socket.IO CORS blocked origin: ${origin}`);
+        callback(null, false); // Socket.IO는 false 반환
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST"],
+    allowedHeaders: ["authorization"],
+  },
+  // 연결 설정
   pingTimeout: 60000,
   pingInterval: 25000,
-  transports: ['websocket', 'polling']
+  // 전송 방식 (WebSocket 우선, 폴링 폴백)
+  transports: ['websocket', 'polling'],
+  // 추가 옵션
+  allowEIO3: true, // Socket.IO v2 클라이언트 호환
+  maxHttpBufferSize: 1e6, // 1MB
+  // 경로 설정
+  path: '/socket.io/',
+  // 서버 옵션
+  serveClient: false,
+  // 업그레이드 활성화
+  allowUpgrades: true,
+  // 압축
+  perMessageDeflate: {
+    threshold: 1024
+  },
+  // HTTPS 프록시 뒤에서 작동
+  cookie: {
+    name: 'io',
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: NODE_ENV === 'production' // 프로덕션에서만 secure
+  }
 });
 
-// Database setup with connection pool simulation
-const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
+// 추가: CORS preflight 요청 처리
+app.options('*', cors(corsOptions));
 
 let db;
 
