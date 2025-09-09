@@ -2,10 +2,19 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import io from 'socket.io-client';
 import toast from 'react-hot-toast';
 
-const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_URL || 
-  (process.env.NODE_ENV === 'production' 
-    ? ''  // 프로덕션: 같은 도메인
-    : 'http://localhost:3002');  // 개발: 로컬 서버
+// Socket server URL configuration
+const getSocketUrl = () => {
+  // Check if we're in production
+  if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    // Production: Use same domain with port 3001
+    return `${window.location.protocol}//${window.location.hostname}:3001`;
+  }
+  
+  // Development: Use localhost
+  return 'http://localhost:3001';
+};
+
+const SOCKET_SERVER_URL = getSocketUrl();
 
 export const useSocket = (userId) => {
   const [isConnected, setIsConnected] = useState(false);
@@ -14,79 +23,114 @@ export const useSocket = (userId) => {
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
+  const maxReconnectAttempts = 10;
   
   useEffect(() => {
     const token = localStorage.getItem('token');
     
     if (!token) {
       console.warn('No token found, skipping socket connection');
+      setConnectionError('인증 토큰이 없습니다. 다시 로그인해주세요.');
       return;
     }
 
     const connectSocket = () => {
       try {
+        console.log('Attempting to connect to:', SOCKET_SERVER_URL);
+        
+        // Clean up existing connection
+        if (socketRef.current) {
+          socketRef.current.removeAllListeners();
+          socketRef.current.disconnect();
+        }
+        
         socketRef.current = io(SOCKET_SERVER_URL, {
           auth: { token },
           transports: ['websocket', 'polling'],
           reconnection: true,
-          reconnectionAttempts: 5,
+          reconnectionAttempts: maxReconnectAttempts,
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,
-          timeout: 10000
+          timeout: 20000,
+          forceNew: true,
+          autoConnect: true
         });
 
         // Connection established
         socketRef.current.on('connect', () => {
-          console.log('Socket connected');
+          console.log('✅ Socket connected:', socketRef.current.id);
           setIsConnected(true);
           setConnectionError(null);
-          reconnectAttemptsRef.current = 0;
           
           if (reconnectAttemptsRef.current > 0) {
-            toast.success('재연결되었습니다');
+            toast.success('서버에 재연결되었습니다');
           }
+          reconnectAttemptsRef.current = 0;
         });
 
         // Connection lost
         socketRef.current.on('disconnect', (reason) => {
-          console.log('Socket disconnected:', reason);
+          console.log('❌ Socket disconnected:', reason);
           setIsConnected(false);
           
+          // Auto reconnect for certain disconnect reasons
           if (reason === 'io server disconnect') {
             // Server initiated disconnect, try to reconnect
-            socketRef.current.connect();
+            reconnectTimeoutRef.current = setTimeout(() => {
+              if (socketRef.current) {
+                socketRef.current.connect();
+              }
+            }, 1000);
+          } else if (reason === 'transport close' || reason === 'transport error') {
+            setConnectionError('서버 연결이 불안정합니다. 재연결 시도중...');
           }
         });
 
         // Connection error
         socketRef.current.on('connect_error', (error) => {
-          console.error('Socket connection error:', error.message);
-          setConnectionError(error.message);
+          console.error('Socket connection error:', error.message, error.type);
           reconnectAttemptsRef.current++;
           
-          if (reconnectAttemptsRef.current === 1) {
-            toast.error('서버 연결 중... 잠시만 기다려주세요');
+          if (error.message === 'Authentication error') {
+            setConnectionError('인증 실패. 다시 로그인해주세요.');
+            toast.error('인증 실패. 다시 로그인해주세요.');
+            // Clear token and redirect to login
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.href = '/login';
+            return;
           }
           
-          if (reconnectAttemptsRef.current > 5) {
-            toast.error('서버 연결 실패. 페이지를 새로고침해주세요');
+          if (reconnectAttemptsRef.current === 1) {
+            setConnectionError(`서버 연결 중... (시도: ${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
+            toast.loading('서버 연결 중...', { duration: 3000 });
+          } else if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+            setConnectionError(`재연결 시도 중... (${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
+          } else {
+            setConnectionError('서버 연결 실패. 페이지를 새로고침해주세요.');
+            toast.error('서버 연결 실패. 페이지를 새로고침해주세요.');
           }
         });
 
         // Reconnection attempts
         socketRef.current.on('reconnect_attempt', (attemptNumber) => {
           console.log(`Reconnection attempt ${attemptNumber}`);
+          setConnectionError(`재연결 시도 중... (${attemptNumber}/${maxReconnectAttempts})`);
         });
 
         // Successfully reconnected
         socketRef.current.on('reconnect', (attemptNumber) => {
-          console.log(`Reconnected after ${attemptNumber} attempts`);
+          console.log(`✅ Reconnected after ${attemptNumber} attempts`);
+          setIsConnected(true);
+          setConnectionError(null);
           toast.success('서버에 재연결되었습니다');
         });
 
         // Server messages
         socketRef.current.on('connected', (data) => {
           console.log('Server confirmed connection:', data);
+          setIsConnected(true);
+          setConnectionError(null);
         });
 
         // Command processing status
@@ -107,6 +151,8 @@ export const useSocket = (userId) => {
             toast.success('칸반 카드가 추가되었습니다');
           } else if (message.type === 'news') {
             toast.success('뉴스를 찾았습니다');
+          } else if (message.type === 'market') {
+            toast.success('시세 정보를 가져왔습니다');
           }
         });
 
@@ -120,18 +166,27 @@ export const useSocket = (userId) => {
           });
         });
 
-        // Error messages
+        // Error messages from server
         socketRef.current.on('error', (error) => {
           console.error('Server error:', error);
-          toast.error(error.message || '오류가 발생했습니다');
+          const errorMessage = error.message || '오류가 발생했습니다';
+          setConnectionError(errorMessage);
+          toast.error(errorMessage);
+        });
+
+        // Ping-pong for keeping connection alive
+        socketRef.current.on('ping', () => {
+          console.log('Ping received from server');
         });
 
       } catch (error) {
         console.error('Failed to create socket connection:', error);
-        setConnectionError(error.message);
+        setConnectionError('소켓 연결 생성 실패: ' + error.message);
+        toast.error('서버 연결 실패');
       }
     };
 
+    // Initial connection
     connectSocket();
 
     // Cleanup
@@ -141,6 +196,7 @@ export const useSocket = (userId) => {
       }
       
       if (socketRef.current) {
+        console.log('Cleaning up socket connection');
         socketRef.current.removeAllListeners();
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -155,12 +211,13 @@ export const useSocket = (userId) => {
       return false;
     }
     
-    if (!isConnected) {
+    if (!socketRef.current.connected) {
       toast.error('서버 연결을 확인해주세요');
       return false;
     }
     
     try {
+      console.log('Sending voice command:', text);
       socketRef.current.emit('voice-command', {
         text,
         timestamp: new Date().toISOString()
@@ -171,11 +228,11 @@ export const useSocket = (userId) => {
       toast.error('명령 전송 실패');
       return false;
     }
-  }, [isConnected]);
+  }, []);
   
   // Move kanban card
   const moveCard = useCallback((cardId, fromColumn, toColumn) => {
-    if (!socketRef.current || !isConnected) {
+    if (!socketRef.current || !socketRef.current.connected) {
       toast.error('서버 연결을 확인해주세요');
       return false;
     }
@@ -192,13 +249,26 @@ export const useSocket = (userId) => {
       toast.error('카드 이동 실패');
       return false;
     }
-  }, [isConnected]);
+  }, []);
   
   // Manual reconnect
   const reconnect = useCallback(() => {
     if (socketRef.current) {
+      console.log('Manual reconnect triggered');
+      reconnectAttemptsRef.current = 0;
       socketRef.current.connect();
+      toast.loading('재연결 시도중...', { duration: 2000 });
     }
+  }, []);
+  
+  // Get connection info
+  const getConnectionInfo = useCallback(() => {
+    return {
+      url: SOCKET_SERVER_URL,
+      connected: socketRef.current?.connected || false,
+      id: socketRef.current?.id || null,
+      transport: socketRef.current?.io?.engine?.transport?.name || 'unknown'
+    };
   }, []);
   
   return {
@@ -208,6 +278,7 @@ export const useSocket = (userId) => {
     sendVoiceCommand,
     moveCard,
     reconnect,
-    socket: socketRef.current
+    socket: socketRef.current,
+    getConnectionInfo
   };
 };
