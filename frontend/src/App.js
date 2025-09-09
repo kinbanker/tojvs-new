@@ -27,9 +27,8 @@ function App() {
   }
 
   return (
-    <Router>
-      // 수정 (3초로 연장)
-      <Toaster 
+    <Router> 
+      <Toaster // 수정 (3초로 연장) 
         toastOptions={{
           duration: 3000, // 5초
           error: {
