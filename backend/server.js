@@ -496,8 +496,8 @@ app.post('/api/register', asyncHandler(async (req, res) => {
 app.post('/api/login', asyncHandler(async (req, res) => {
   const { username, password } = req.body;
   console.log('Login attempt:', username); // 추가
-  
-  if (!username || !password) {
+
+  if (!username || !password) {}
     console.log('Sending 400: Missing credentials'); // 추가
     return res.status(400).json({ error: 'ID와 비밀번호를 입력해주세요.' });
   }
