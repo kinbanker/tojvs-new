@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, AlertCircle } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, WifiOff, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-const VoiceRecorder = ({ onTranscript, className }) => {
+const VoiceRecorder = ({ onTranscript, className, isConnected = true, onReconnect }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isSupported, setIsSupported] = useState(true);
@@ -43,6 +43,14 @@ const VoiceRecorder = ({ onTranscript, className }) => {
         
         if (event.results[current].isFinal) {
           console.log('Final transcript:', transcript);
+          
+          // Check if socket is connected before sending
+          if (!isConnected) {
+            toast.error('서버 연결이 끊겼습니다. 재연결을 시도해주세요.');
+            setTranscript('');
+            stopRecording();
+            return;
+          }
           
           // Send transcript if it's not empty
           if (transcript.trim()) {
@@ -129,9 +137,15 @@ const VoiceRecorder = ({ onTranscript, className }) => {
       }
       clearTimeout(silenceTimerRef.current);
     };
-  }, [onTranscript, isRecording]);
+  }, [onTranscript, isRecording, isConnected]);
 
   const startRecording = async () => {
+    // Check socket connection first
+    if (!isConnected) {
+      toast.error('서버 연결이 끊겼습니다. 재연결을 시도해주세요.');
+      return;
+    }
+    
     if (!isSupported || !recognitionRef.current) {
       toast.error('음성 인식을 사용할 수 없습니다.');
       return;
@@ -185,6 +199,32 @@ const VoiceRecorder = ({ onTranscript, className }) => {
     }
   };
 
+  // Show connection error
+  if (!isConnected) {
+    return (
+      <div className={`p-4 bg-red-50 ${className}`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3 text-red-600">
+            <WifiOff className="w-5 h-5" />
+            <div>
+              <p className="text-sm font-medium">서버 연결 끊김</p>
+              <p className="text-xs">음성 인식을 사용하려면 서버 연결이 필요합니다.</p>
+            </div>
+          </div>
+          {onReconnect && (
+            <button
+              onClick={onReconnect}
+              className="p-2 text-red-600 hover:bg-red-100 rounded-lg transition"
+              title="재연결 시도"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // Show unsupported message
   if (!isSupported) {
     return (
@@ -211,6 +251,7 @@ const VoiceRecorder = ({ onTranscript, className }) => {
               : 'bg-blue-600 hover:bg-blue-700'
           } ${error ? 'ring-2 ring-red-400' : ''}`}
           title={isRecording ? '녹음 중지' : '녹음 시작'}
+          disabled={!isConnected}
         >
           {isRecording ? (
             <>
