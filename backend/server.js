@@ -495,8 +495,10 @@ app.post('/api/register', asyncHandler(async (req, res) => {
 // Login with refresh token
 app.post('/api/login', asyncHandler(async (req, res) => {
   const { username, password } = req.body;
+  console.log('Login attempt:', username); // 추가
 
   if (!username || !password) {
+    console.log('Sending 400: Missing credentials'); // 추가
     return res.status(400).json({ error: 'ID와 비밀번호를 입력해주세요.' });
   }
 
@@ -506,11 +508,13 @@ app.post('/api/login', asyncHandler(async (req, res) => {
   );
   
   if (!user || !user.is_active) {
+    console.log('Sending 401: Account not found'); // 추가
     return res.status(401).json({ error: '계정을 찾을 수 없습니다.' });
   }
   
   const validPassword = await bcrypt.compare(password, user.password);
   if (!validPassword) {
+    console.log('Sending 401: Invalid password'); // 추가
     return res.status(401).json({ error: 'ID 또는 비밀번호가 올바르지 않습니다.' });
   }
 
