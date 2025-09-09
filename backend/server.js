@@ -9,6 +9,8 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const validator = require('validator');
+const { open } = require('sqlite'); // 누락된 import 추가
+const sqlite3 = require('sqlite3'); // 누락된 import 추가
 require('dotenv').config();
 
 const app = express();
@@ -36,13 +38,17 @@ const ALLOWED_DOMAINS = process.env.ALLOWED_DOMAINS ?
 // Production check
 const isProduction = NODE_ENV === 'production';
 
-// Allowed origins configuration - 수정된 버전
+// Allowed origins configuration - 개선된 버전
 const getAllowedOrigins = () => {
   const origins = [
     'http://localhost:3000',
     'http://localhost:3001',
     'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001'
+    'http://127.0.0.1:3001',
+    // 개발 환경을 위한 추가 주소
+    'http://localhost:8080',
+    'http://localhost:8000',
+    'http://0.0.0.0:3000'
   ];
   
   // Add custom domains from environment
@@ -58,10 +64,11 @@ const getAllowedOrigins = () => {
         origins.push(`https://www.${domain}`);
       }
       
-      // dev 서브도메인 추가 (메인 도메인인 경우)
-      if (!domain.includes('.') || domain.split('.').length === 2) {
-        origins.push(`http://dev.${domain}`);
-        origins.push(`https://dev.${domain}`);
+      // 포트 번호가 있는 경우 처리
+      if (domain.includes(':')) {
+        const baseDomain = domain.split(':')[0];
+        origins.push(`http://${baseDomain}`);
+        origins.push(`https://${baseDomain}`);
       }
     });
   }
@@ -74,7 +81,10 @@ const getAllowedOrigins = () => {
     origins.push(`http://${process.env.SERVER_IP}:3001`);
   }
   
-  return origins;
+  // 중복 제거 및 정렬
+  const uniqueOrigins = [...new Set(origins)];
+  console.log('📍 Allowed Origins:', uniqueOrigins);
+  return uniqueOrigins;
 };
 
 // Security middleware with proper CSP
@@ -112,87 +122,125 @@ app.use('/api/', apiLimiter);
 app.use('/api/login', authLimiter);
 app.use('/api/register', authLimiter);
 
-// Unified CORS configuration
+// CORS 옵션 설정 - 개선된 버전
 const corsOptions = {
-  origin: function (origin, callback) {
+  origin: function(origin, callback) {
     const allowedOrigins = getAllowedOrigins();
     
-    // origin이 없는 경우 (같은 도메인, Postman, 서버 간 통신 등)
+    // 개발 환경에서는 origin이 없는 요청도 허용 (Postman, curl 등)
+    if (!origin && NODE_ENV === 'development') {
+      console.log('✅ CORS: Allowing request without origin (development)');
+      return callback(null, true);
+    }
+    
+    // origin이 없는 경우 (같은 도메인 요청)
     if (!origin) {
+      console.log('✅ CORS: Allowing same-origin request');
       return callback(null, true);
     }
     
-    // 개발 환경에서는 모든 origin 허용
-    if (NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-    
-    // 프로덕션에서는 허용 목록 확인
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    // 허용된 origin인지 확인
+    if (allowedOrigins.includes(origin)) {
+      console.log(`✅ CORS: Allowing origin: ${origin}`);
       callback(null, true);
     } else {
-      console.warn(`CORS blocked origin: ${origin}`);
-      console.log('Allowed origins:', allowedOrigins); // 디버깅용
-      callback(new Error('Not allowed by CORS'));
+      console.warn(`❌ CORS: Blocking origin: ${origin}`);
+      console.warn(`📋 Allowed origins:`, allowedOrigins);
+      callback(new Error(`CORS policy: ${origin} is not allowed`), false);
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With', 
+    'Content-Type', 
+    'Accept',
+    'Authorization',
+    'Cache-Control',
+    'Pragma'
+  ],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400 // 24시간 캐시
+  maxAge: 86400, // 24시간 preflight 캐시
+  optionsSuccessStatus: 200 // IE11 호환성
 };
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Socket.io 설정 개선
+// Socket.io 설정 개선 - 더 견고한 버전
 const io = socketIO(server, {
   cors: {
     origin: function(origin, callback) {
-      // Socket.IO를 위한 별도 CORS 처리
       const allowedOrigins = getAllowedOrigins();
       
+      console.log(`🔌 Socket.IO connection attempt from: ${origin || 'same-origin'}`);
+      
+      // 개발 환경 또는 origin이 없는 경우
       if (!origin || NODE_ENV === 'development') {
+        console.log('✅ Socket.IO: Allowing connection (development or same-origin)');
         return callback(null, true);
       }
       
-      if (allowedOrigins.indexOf(origin) !== -1) {
+      // 허용된 origin 확인
+      if (allowedOrigins.includes(origin)) {
+        console.log(`✅ Socket.IO: Allowing origin: ${origin}`);
         callback(null, true);
       } else {
-        console.warn(`Socket.IO CORS blocked origin: ${origin}`);
-        callback(null, false); // Socket.IO는 false 반환
+        console.warn(`❌ Socket.IO: Blocking origin: ${origin}`);
+        console.warn(`📋 Socket.IO allowed origins:`, allowedOrigins);
+        callback(null, false); // Socket.IO는 에러 대신 false 반환
       }
     },
     credentials: true,
     methods: ["GET", "POST"],
-    allowedHeaders: ["authorization"],
+    allowedHeaders: [
+      "authorization",
+      "content-type",
+      "x-requested-with",
+      "accept",
+      "origin",
+      "user-agent",
+      "cache-control"
+    ],
   },
-  // 연결 설정
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  // 전송 방식 (WebSocket 우선, 폴링 폴백)
-  transports: ['websocket', 'polling'],
+  
+  // 연결 설정 - 더 안정적인 값들
+  pingTimeout: 60000,        // 60초
+  pingInterval: 25000,       // 25초
+  connectTimeout: 45000,     // 연결 타임아웃 45초
+  
+  // 전송 방식 설정
+  transports: ['polling', 'websocket'], // polling을 먼저 시도
+  allowUpgrades: true,       // WebSocket으로 업그레이드 허용
+  upgradeTimeout: 10000,     // 업그레이드 타임아웃 10초
+  
   // 추가 옵션
-  allowEIO3: true, // Socket.IO v2 클라이언트 호환
-  maxHttpBufferSize: 1e6, // 1MB
+  allowEIO3: true,           // Engine.IO v3 호환성 (Socket.IO v2 클라이언트)
+  maxHttpBufferSize: 1e6,    // 1MB
+  
   // 경로 설정
   path: '/socket.io/',
+  
   // 서버 옵션
-  serveClient: false,
-  // 업그레이드 활성화
-  allowUpgrades: true,
-  // 압축
+  serveClient: false,        // 클라이언트 파일 서빙 비활성화
+  
+  // 압축 설정
+  compression: true,
   perMessageDeflate: {
-    threshold: 1024
+    threshold: 1024,         // 1KB 이상일 때만 압축
+    concurrencyLimit: 10,    // 동시 압축 스트림 제한
+    memLevel: 7              // 메모리 사용량 조절
   },
-  // HTTPS 프록시 뒤에서 작동
+  
+  // 쿠키 설정
   cookie: {
     name: 'io',
     httpOnly: true,
-    sameSite: 'strict',
-    secure: NODE_ENV === 'production' // 프로덕션에서만 secure
+    sameSite: NODE_ENV === 'production' ? 'none' : 'lax', // 프로덕션에서 cross-site 허용
+    secure: NODE_ENV === 'production', // 프로덕션에서만 HTTPS 필수
+    maxAge: 24 * 60 * 60 * 1000 // 24시간
   }
 });
 
@@ -373,7 +421,7 @@ const errorHandler = (err, req, res, next) => {
   
   // Don't leak error details in production
   if (isProduction) {
-    if (err.message === 'Not allowed by CORS') {
+    if (err.message === 'Not allowed by CORS' || err.message.includes('CORS policy')) {
       return res.status(403).json({ error: '접근이 거부되었습니다.' });
     }
     return res.status(500).json({ error: '서버 오류가 발생했습니다.' });
@@ -629,8 +677,25 @@ io.use((socket, next) => {
   });
 });
 
+// Socket.IO 연결 로깅 개선
 io.on('connection', (socket) => {
-  console.log(`User ${socket.username} connected`);
+  const clientIP = socket.handshake.address;
+  const userAgent = socket.handshake.headers['user-agent'];
+  const origin = socket.handshake.headers.origin;
+  
+  console.log(`🔌 New Socket.IO connection:`, {
+    id: socket.id,
+    user: socket.username,
+    ip: clientIP,
+    origin: origin,
+    transport: socket.conn.transport.name,
+    userAgent: userAgent?.substring(0, 100) + '...'
+  });
+  
+  // 전송 방식 변경 감지
+  socket.conn.on('upgrade', () => {
+    console.log(`🚀 Socket ${socket.id} upgraded to: ${socket.conn.transport.name}`);
+  });
 
   socket.emit('connected', { 
     message: '연결되었습니다.',
@@ -725,8 +790,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log(`User ${socket.username} disconnected`);
+  socket.on('disconnect', (reason) => {
+    console.log(`❌ Socket ${socket.id} (${socket.username}) disconnected:`, reason);
+  });
+});
+
+// Socket.IO 에러 핸들링
+io.engine.on("connection_error", (err) => {
+  console.error("Socket.IO connection error:", {
+    code: err.code,
+    message: err.message,
+    context: err.context,
+    type: err.type
   });
 });
 
@@ -751,18 +826,39 @@ if (isProduction) {
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
-// Graceful shutdown
+// 프로세스 종료 시 Socket.IO 정리
 process.on('SIGTERM', () => {
-  console.log('SIGTERM received: closing server');
-  server.close(() => {
-    db.close(() => {
-      console.log('Server closed');
+  console.log('🔄 SIGTERM received, closing Socket.IO server...');
+  io.close(() => {
+    console.log('✅ Socket.IO server closed');
+    if (db) {
+      db.close(() => {
+        console.log('✅ Database closed');
+        process.exit(0);
+      });
+    } else {
       process.exit(0);
-    });
+    }
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🔄 SIGINT received, closing Socket.IO server...');
+  io.close(() => {
+    console.log('✅ Socket.IO server closed');
+    if (db) {
+      db.close(() => {
+        console.log('✅ Database closed');
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
   });
 });
 
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${NODE_ENV} mode`);
+  console.log(`Allowed domains: ${ALLOWED_DOMAINS.join(', ')}`);
 });

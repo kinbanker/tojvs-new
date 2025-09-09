@@ -20,86 +20,184 @@ const Dashboard = ({ onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [customSocket, setCustomSocket] = useState(null);
   const [isCustomSocketConnected, setIsCustomSocketConnected] = useState(false);
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
 
-  // 커스텀 소켓 연결 설정
-  useEffect(() => {
-    const initializeCustomSocket = () => {
-      // 옵션 1: 상대 경로 사용
-      const socketInstance = io('/', {
-        path: '/socket.io/',
-        transports: ['websocket', 'polling'],
-        secure: true,
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        auth: {
-          token: localStorage.getItem('token')
-        }
-      });
+  // 소켓 연결 함수들
+  const createSocketWithPolling = () => {
+    console.log('🔄 Trying Socket.IO with polling transport...');
+    return io('https://dev.tojvs.com', {
+      path: '/socket.io/',
+      transports: ['polling'], // WebSocket 제외, polling만 사용
+      upgrade: false, // WebSocket으로 업그레이드 방지
+      auth: {
+        token: localStorage.getItem('token')
+      },
+      reconnection: true,
+      reconnectionAttempts: 3,
+      reconnectionDelay: 2000,
+      timeout: 10000
+    });
+  };
 
-      // 옵션 2: 명시적 URL 사용 (필요시 주석 해제)
-      /*
-      const socketInstance = io('https://dev.tojvs.com', {
-        path: '/socket.io/',
-        transports: ['websocket', 'polling'],
-        auth: {
-          token: localStorage.getItem('token')
-        }
-      });
-      */
+  const createSocketWithWebsocket = () => {
+    console.log('🔄 Trying Socket.IO with websocket transport...');
+    return io('https://dev.tojvs.com', {
+      path: '/socket.io/',
+      transports: ['websocket'],
+      forceNew: true,
+      auth: {
+        token: localStorage.getItem('token')
+      },
+      reconnection: true,
+      reconnectionAttempts: 2,
+      reconnectionDelay: 1000,
+      timeout: 5000
+    });
+  };
 
-      // 소켓 이벤트 리스너
-      socketInstance.on('connect', () => {
-        console.log('Custom socket connected:', socketInstance.id);
-        setIsCustomSocketConnected(true);
-        toast.success('서버에 연결되었습니다.');
-      });
+  const createSocketRelativePath = () => {
+    console.log('🔄 Trying Socket.IO with relative path...');
+    return io('/', {
+      path: '/socket.io/',
+      transports: ['polling', 'websocket'],
+      auth: {
+        token: localStorage.getItem('token')
+      },
+      reconnection: true,
+      reconnectionAttempts: 3,
+      reconnectionDelay: 1000
+    });
+  };
 
-      socketInstance.on('disconnect', (reason) => {
-        console.log('Custom socket disconnected:', reason);
-        setIsCustomSocketConnected(false);
+  const createSocketHttp = () => {
+    console.log('🔄 Trying Socket.IO with HTTP (fallback)...');
+    return io('http://dev.tojvs.com', {
+      path: '/socket.io/',
+      transports: ['polling'],
+      auth: {
+        token: localStorage.getItem('token')
+      },
+      reconnection: false,
+      timeout: 5000
+    });
+  };
+
+  // 소켓 이벤트 리스너 설정
+  const setupSocketListeners = (socketInstance, connectionType) => {
+    socketInstance.on('connect', () => {
+      console.log(`✅ ${connectionType} socket connected:`, socketInstance.id);
+      setIsCustomSocketConnected(true);
+      setConnectionAttempts(0);
+      toast.success(`서버에 연결되었습니다 (${connectionType})`);
+    });
+
+    socketInstance.on('disconnect', (reason) => {
+      console.log(`❌ ${connectionType} socket disconnected:`, reason);
+      setIsCustomSocketConnected(false);
+      if (reason !== 'io client disconnect') {
         toast.error('서버 연결이 끊어졌습니다.');
-      });
+      }
+    });
 
-      socketInstance.on('connect_error', (error) => {
-        console.error('Custom socket connection error:', error);
-        setIsCustomSocketConnected(false);
-        toast.error('서버 연결에 실패했습니다.');
-      });
+    socketInstance.on('connect_error', (error) => {
+      console.error(`❌ ${connectionType} connection error:`, error.message);
+      setIsCustomSocketConnected(false);
+      setConnectionAttempts(prev => prev + 1);
+    });
 
-      socketInstance.on('reconnect', (attemptNumber) => {
-        console.log('Custom socket reconnected after', attemptNumber, 'attempts');
-        setIsCustomSocketConnected(true);
-        toast.success('서버에 재연결되었습니다.');
-      });
+    socketInstance.on('reconnect', (attemptNumber) => {
+      console.log(`🔄 ${connectionType} reconnected after`, attemptNumber, 'attempts');
+      setIsCustomSocketConnected(true);
+      toast.success('서버에 재연결되었습니다.');
+    });
 
-      socketInstance.on('reconnect_error', (error) => {
-        console.error('Custom socket reconnection error:', error);
-      });
+    return socketInstance;
+  };
 
-      socketInstance.on('reconnect_failed', () => {
-        console.error('Custom socket reconnection failed');
-        toast.error('서버 재연결에 실패했습니다.');
-      });
-
-      setCustomSocket(socketInstance);
-    };
-
-    if (user.id && localStorage.getItem('token')) {
-      initializeCustomSocket();
+  // 다중 연결 시도 함수
+  const attemptConnection = async () => {
+    if (connectionAttempts >= 4) {
+      console.log('❌ All connection attempts failed');
+      toast.error('서버 연결에 실패했습니다. 모든 방법을 시도했습니다.');
+      return;
     }
 
-    // 컴포넌트 언마운트 시 소켓 연결 해제
+    let socketInstance = null;
+    let connectionType = '';
+
+    try {
+      switch (connectionAttempts) {
+        case 0:
+          socketInstance = createSocketWithPolling();
+          connectionType = 'HTTPS Polling';
+          break;
+        case 1:
+          socketInstance = createSocketRelativePath();
+          connectionType = 'Relative Path';
+          break;
+        case 2:
+          socketInstance = createSocketWithWebsocket();
+          connectionType = 'HTTPS WebSocket';
+          break;
+        case 3:
+          socketInstance = createSocketHttp();
+          connectionType = 'HTTP Fallback';
+          break;
+        default:
+          return;
+      }
+
+      if (socketInstance) {
+        // 기존 소켓이 있다면 정리
+        if (customSocket) {
+          customSocket.disconnect();
+        }
+
+        setupSocketListeners(socketInstance, connectionType);
+        setCustomSocket(socketInstance);
+
+        // 연결 시도 후 잠시 대기
+        setTimeout(() => {
+          if (!socketInstance.connected) {
+            console.log(`❌ ${connectionType} connection timeout, trying next method...`);
+            socketInstance.disconnect();
+            setConnectionAttempts(prev => prev + 1);
+          }
+        }, 5000);
+      }
+    } catch (error) {
+      console.error(`❌ Error creating ${connectionType} socket:`, error);
+      setConnectionAttempts(prev => prev + 1);
+    }
+  };
+
+  // 소켓 초기화
+  useEffect(() => {
+    if (user.id && localStorage.getItem('token')) {
+      console.log('🚀 Starting socket connection attempts...');
+      attemptConnection();
+    }
+
     return () => {
       if (customSocket) {
         customSocket.disconnect();
-        console.log('Custom socket disconnected on unmount');
+        console.log('🔌 Custom socket disconnected on unmount');
       }
     };
-  }, [user.id]);
+  }, [user.id, connectionAttempts]);
+
+  // 수동 재연결 함수
+  const handleManualReconnect = () => {
+    setConnectionAttempts(0);
+    setIsCustomSocketConnected(false);
+    if (customSocket) {
+      customSocket.disconnect();
+    }
+    toast.info('연결을 다시 시도합니다...');
+  };
 
   // 기존 useSocket 훅의 lastMessage 처리
   useEffect(() => {
@@ -139,7 +237,9 @@ const Dashboard = ({ onLogout }) => {
         userId: user.id,
         timestamp: new Date().toISOString()
       });
+      console.log('📤 Message sent via custom socket:', message);
     } else {
+      console.warn('❌ Custom socket not connected, cannot send message');
       toast.error('서버에 연결되지 않았습니다.');
     }
   };
@@ -156,21 +256,23 @@ const Dashboard = ({ onLogout }) => {
   const handleVoiceInput = (text) => {
     addMessage(text, 'user');
     
-    // 기존 useSocket 훅 사용
-    sendVoiceCommand(text);
-    
-    // 또는 커스텀 소켓 사용 (필요에 따라 선택)
-    // sendCustomMessage(text);
+    // 우선순위: 커스텀 소켓 → useSocket 훅
+    if (customSocket && isCustomSocketConnected) {
+      sendCustomMessage(text);
+    } else if (socket && isConnected) {
+      sendVoiceCommand(text);
+    } else {
+      toast.error('서버에 연결되지 않았습니다.');
+    }
   };
 
-  // 로그아웃 개선: 서버 API 호출 → 로컬스토리지 정리 + 소켓 연결 해제
+  // 로그아웃 개선
   const handleLogout = async () => {
     try {
-      await apiUtils.logout(); // 서버에 refreshToken 무효화 요청
+      await apiUtils.logout();
     } catch (error) {
       console.warn('서버 로그아웃 실패 (무시 가능):', error);
     } finally {
-      // 커스텀 소켓 연결 해제
       if (customSocket) {
         customSocket.disconnect();
         setCustomSocket(null);
@@ -221,19 +323,43 @@ const Dashboard = ({ onLogout }) => {
                 </div>
               </div>
               
-              {/* 연결 상태 표시 */}
-              <div className="mt-6 flex justify-center space-x-4">
-                <div className="flex items-center bg-white px-4 py-2 rounded-lg shadow-sm">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-                  <span className="text-sm text-gray-600">
-                    Hook Socket: {isConnected ? '연결됨' : '연결 끊김'}
-                  </span>
+              {/* 연결 상태 및 디버깅 정보 */}
+              <div className="mt-6 space-y-4">
+                <div className="flex justify-center space-x-4">
+                  <div className="flex items-center bg-white px-4 py-2 rounded-lg shadow-sm">
+                    <div className={`w-2 h-2 rounded-full mr-2 ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                    <span className="text-sm text-gray-600">
+                      Hook Socket: {isConnected ? '연결됨' : '연결 끊김'}
+                    </span>
+                  </div>
+                  <div className="flex items-center bg-white px-4 py-2 rounded-lg shadow-sm">
+                    <div className={`w-2 h-2 rounded-full mr-2 ${isCustomSocketConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+                    <span className="text-sm text-gray-600">
+                      Custom Socket: {isCustomSocketConnected ? '연결됨' : '연결 끊김'}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center bg-white px-4 py-2 rounded-lg shadow-sm">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${isCustomSocketConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-                  <span className="text-sm text-gray-600">
-                    Custom Socket: {isCustomSocketConnected ? '연결됨' : '연결 끊김'}
-                  </span>
+                
+                {/* 디버깅 정보 */}
+                <div className="bg-white p-4 rounded-lg shadow-sm max-w-lg mx-auto">
+                  <h4 className="text-sm font-semibold text-gray-700 mb-2">연결 정보</h4>
+                  <div className="text-xs text-gray-600 space-y-1">
+                    <p>연결 시도: {connectionAttempts + 1}/4</p>
+                    <p>토큰 존재: {localStorage.getItem('token') ? '✅' : '❌'}</p>
+                    <p>사용자 ID: {user.id || '없음'}</p>
+                    {customSocket && (
+                      <p>소켓 ID: {customSocket.id || '연결 중...'}</p>
+                    )}
+                  </div>
+                  
+                  {!isCustomSocketConnected && !isConnected && (
+                    <button
+                      onClick={handleManualReconnect}
+                      className="mt-3 px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors"
+                    >
+                      다시 연결 시도
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
