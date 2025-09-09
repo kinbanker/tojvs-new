@@ -39,6 +39,7 @@ function App() {
             duration: 4000, // 성공은 4초
           }
         }}
+      />
       <Routes>
         <Route 
           path="/login" 
