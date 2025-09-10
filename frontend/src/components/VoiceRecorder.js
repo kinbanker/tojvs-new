@@ -2,13 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, AlertCircle, WifiOff, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-const VoiceRecorder = ({ onTranscript, className, isConnected = true, onReconnect }) => {
+const VoiceRecorder = ({ onTranscript, className, isConnected = true, onReconnect, connectionError = null }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isSupported, setIsSupported] = useState(true);
   const [error, setError] = useState(null);
   const recognitionRef = useRef(null);
   const silenceTimerRef = useRef(null);
+
+  // Debug logging
+  useEffect(() => {
+    console.log('VoiceRecorder - isConnected:', isConnected);
+    console.log('VoiceRecorder - connectionError:', connectionError);
+  }, [isConnected, connectionError]);
 
   useEffect(() => {
     // Check browser support
@@ -199,15 +205,17 @@ const VoiceRecorder = ({ onTranscript, className, isConnected = true, onReconnec
     }
   };
 
-  // Show connection error
-  if (!isConnected) {
+  // Show connection error - Updated to show when not connected OR has connection error
+  if (!isConnected || connectionError) {
     return (
       <div className={`p-4 bg-red-50 ${className}`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3 text-red-600">
             <WifiOff className="w-5 h-5" />
             <div>
-              <p className="text-sm font-medium">서버 연결 끊김</p>
+              <p className="text-sm font-medium">
+                {connectionError || '서버 연결 끊김'}
+              </p>
               <p className="text-xs">음성 인식을 사용하려면 서버 연결이 필요합니다.</p>
             </div>
           </div>
