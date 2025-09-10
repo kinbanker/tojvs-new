@@ -820,6 +820,11 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
     userId: req.body.userId,
     timestamp: new Date().toISOString()
   });
+
+    // 디버그 추가
+  console.log('[n8n Webhook] io exists?', !!io);
+  console.log('[n8n Webhook] io type:', typeof io);
+  console.log('[n8n Webhook] io.sockets?', !!io?.sockets);
   
   try {
     const { socketId, type, data, userId, username } = req.body;
