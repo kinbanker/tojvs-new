@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
+import { SocketProvider } from './context/SocketContext';
 import Login from './components/Login';
 import Register from './components/Register';
 import Dashboard from './components/Dashboard.js';
@@ -60,7 +61,9 @@ function App() {
           path="/" 
           element={
             isAuthenticated ? 
-            <Dashboard onLogout={() => setIsAuthenticated(false)} /> : 
+            <SocketProvider>
+              <Dashboard onLogout={() => setIsAuthenticated(false)} />
+            </SocketProvider> : 
             <Navigate to="/login" replace />
           } 
         />
