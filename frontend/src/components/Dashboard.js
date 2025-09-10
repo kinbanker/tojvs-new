@@ -21,6 +21,7 @@ const Dashboard = ({ onLogout }) => {
   const [customSocket, setCustomSocket] = useState(null);
   const [isCustomSocketConnected, setIsCustomSocketConnected] = useState(false);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
+  const [customSocketMessage, setCustomSocketMessage] = useState(null);
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
@@ -120,7 +121,7 @@ const Dashboard = ({ onLogout }) => {
     // 커스텀 소켓의 메시지 처리
     socketInstance.on('command-result', (message) => {
       console.log('Received result via custom socket:', message);
-      setLastMessage(message);
+      setCustomSocketMessage(message);
       
       // Show success message based on type
       if (message.type === 'kanban') {
@@ -226,6 +227,36 @@ const Dashboard = ({ onLogout }) => {
     }
     toast.info('연결을 다시 시도합니다...');
   };
+
+  // 커스텀 소켓 메시지 처리
+  useEffect(() => {
+    if (customSocketMessage) {
+      const { type, data } = customSocketMessage;
+      
+      switch(type) {
+        case 'news':
+          setCurrentView('news');
+          setViewData(data);
+          addMessage(`뉴스를 찾았습니다: ${data.keyword}`, 'system');
+          break;
+          
+        case 'kanban':
+          setCurrentView('kanban');
+          if (data.action === 'ADD_CARD') {
+            addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system');
+          }
+          break;
+          
+        case 'chart':
+          setCurrentView('chart');
+          setViewData(data);
+          break;
+          
+        default:
+          break;
+      }
+    }
+  }, [customSocketMessage]);
 
   // 기존 useSocket 훅의 lastMessage 처리
   useEffect(() => {
