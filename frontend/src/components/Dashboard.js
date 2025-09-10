@@ -18,7 +18,16 @@ const Dashboard = ({ onLogout }) => {
   const [loading, setLoading] = useState(false);
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const { isConnected, lastMessage, sendVoiceCommand, socket, reconnect, connectionError } = useSocket(user.id);
+  const { isConnected, lastMessage, sendVoiceCommand, socket, reconnect, connectionError, getConnectionInfo } = useSocket(user.id);
+
+  // Debug logging for connection status
+  useEffect(() => {
+    console.log('Dashboard - isConnected:', isConnected);
+    console.log('Dashboard - socket.connected:', socket?.connected);
+    if (getConnectionInfo) {
+      console.log('Dashboard - Connection Info:', getConnectionInfo());
+    }
+  }, [isConnected, socket, getConnectionInfo]);
 
   useEffect(() => {
     if (lastMessage) {
@@ -80,72 +89,81 @@ const Dashboard = ({ onLogout }) => {
   };
 
   // Connection Status Component
-  const ConnectionStatus = () => (
-    <div className="bg-white border-b border-gray-200 px-4 py-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center">
-            <span className="text-sm font-medium mr-2">Hook Socket:</span>
-            {isConnected ? (
-              <span className="flex items-center text-green-600">
-                <CheckCircle className="w-4 h-4 mr-1" />
-                연결됨
-              </span>
-            ) : (
-              <span className="flex items-center text-red-600">
-                <XCircle className="w-4 h-4 mr-1" />
-                연결 끊김
-              </span>
-            )}
+  const ConnectionStatus = () => {
+    // Use both isConnected and socket.connected for accurate status
+    const hookConnected = isConnected;
+    const socketConnected = socket?.connected || false;
+    const connectionInfo = getConnectionInfo ? getConnectionInfo() : null;
+    
+    return (
+      <div className="bg-white border-b border-gray-200 px-4 py-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center">
+              <span className="text-sm font-medium mr-2">Hook Socket:</span>
+              {hookConnected ? (
+                <span className="flex items-center text-green-600">
+                  <CheckCircle className="w-4 h-4 mr-1" />
+                  연결됨
+                </span>
+              ) : (
+                <span className="flex items-center text-red-600">
+                  <XCircle className="w-4 h-4 mr-1" />
+                  연결 끊김
+                </span>
+              )}
+            </div>
+            
+            <div className="flex items-center">
+              <span className="text-sm font-medium mr-2">Custom Socket:</span>
+              {socketConnected ? (
+                <span className="flex items-center text-green-600">
+                  <CheckCircle className="w-4 h-4 mr-1" />
+                  연결됨
+                </span>
+              ) : (
+                <span className="flex items-center text-red-600">
+                  <XCircle className="w-4 h-4 mr-1" />
+                  연결 끊김
+                </span>
+              )}
+            </div>
           </div>
           
-          <div className="flex items-center">
-            <span className="text-sm font-medium mr-2">Custom Socket:</span>
-            {socket && socket.connected ? (
-              <span className="flex items-center text-green-600">
-                <CheckCircle className="w-4 h-4 mr-1" />
-                연결됨
-              </span>
-            ) : (
-              <span className="flex items-center text-red-600">
-                <XCircle className="w-4 h-4 mr-1" />
-                연결 끊김
-              </span>
+          <div className="flex items-center space-x-3 text-xs text-gray-600">
+            <span>연결정보</span>
+            <span>•</span>
+            <span>연결 시도: {connectionInfo?.connected ? '성공' : '실패'}</span>
+            <span>•</span>
+            <span>토큰 존재: {localStorage.getItem('token') ? '✓' : '✗'}</span>
+            <span>•</span>
+            <span>사용자 ID: {user.id || 'N/A'}</span>
+            {connectionInfo?.id && (
+              <>
+                <span>•</span>
+                <span>소켓 ID: {connectionInfo.id.substring(0, 8)}...</span>
+              </>
             )}
           </div>
         </div>
         
-        <div className="flex items-center space-x-3 text-xs text-gray-600">
-          <span>연결정보</span>
-          <span>•</span>
-          <span>토큰 존재: {localStorage.getItem('token') ? '✓' : '✗'}</span>
-          <span>•</span>
-          <span>사용자 ID: {user.id || 'N/A'}</span>
-          {socket && socket.id && (
-            <>
-              <span>•</span>
-              <span>소켓 ID: {socket.id.substring(0, 8)}...</span>
-            </>
-          )}
-        </div>
-      </div>
-      
-      {connectionError && (
-        <div className="mt-2 flex items-center justify-between bg-red-50 px-3 py-2 rounded">
-          <div className="flex items-center text-red-600 text-sm">
-            <AlertCircle className="w-4 h-4 mr-2" />
-            <span>{connectionError}</span>
+        {connectionError && (
+          <div className="mt-2 flex items-center justify-between bg-red-50 px-3 py-2 rounded">
+            <div className="flex items-center text-red-600 text-sm">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              <span>{connectionError}</span>
+            </div>
+            <button
+              onClick={handleReconnect}
+              className="text-sm text-red-600 hover:text-red-700 underline"
+            >
+              재연결 시도
+            </button>
           </div>
-          <button
-            onClick={handleReconnect}
-            className="text-sm text-red-600 hover:text-red-700 underline"
-          >
-            재연결 시도
-          </button>
-        </div>
-      )}
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
 
   const renderMainContent = () => {
     if (activeMenu === 'plan') {
@@ -229,6 +247,9 @@ const Dashboard = ({ onLogout }) => {
     );
   };
 
+  // Force boolean conversion for child components
+  const socketConnected = Boolean(isConnected || socket?.connected);
+
   return (
     <div className="flex h-screen bg-gray-50">
       {/* Left Chat Panel */}
@@ -237,9 +258,9 @@ const Dashboard = ({ onLogout }) => {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">투자비스 AI</h2>
             <div className="flex items-center">
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+              <div className={`w-2 h-2 rounded-full ${socketConnected ? 'bg-green-400' : 'bg-red-400'}`} />
               <span className="ml-2 text-sm text-white opacity-90">
-                {isConnected ? '연결됨' : '연결 끊김'}
+                {socketConnected ? '연결됨' : '연결 끊김'}
               </span>
             </div>
           </div>
@@ -248,14 +269,16 @@ const Dashboard = ({ onLogout }) => {
         <ChatPanel 
           messages={messages} 
           className="flex-1 overflow-y-auto"
-          isConnected={isConnected}
+          isConnected={socketConnected}
+          connectionError={connectionError}
         />
         
         <VoiceRecorder 
           onTranscript={handleVoiceInput}
           className="border-t bg-gray-50"
-          isConnected={isConnected}
+          isConnected={socketConnected}
           onReconnect={handleReconnect}
+          connectionError={connectionError}
         />
       </div>
       
