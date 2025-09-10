@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { Bot, User, WifiOff, Wifi } from 'lucide-react';
+import { Bot, User, WifiOff, Wifi, AlertCircle } from 'lucide-react';
 
-const ChatPanel = ({ messages, className, isConnected = true }) => {
+const ChatPanel = ({ messages, className, isConnected = true, connectionError = null }) => {
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -10,14 +10,29 @@ const ChatPanel = ({ messages, className, isConnected = true }) => {
 
   useEffect(scrollToBottom, [messages]);
 
+  // Debug logging
+  useEffect(() => {
+    console.log('ChatPanel - isConnected:', isConnected);
+    console.log('ChatPanel - connectionError:', connectionError);
+  }, [isConnected, connectionError]);
+
   return (
     <div className={`flex flex-col ${className}`}>
       {/* Connection Status Bar */}
-      {!isConnected && (
+      {(!isConnected || connectionError) && (
         <div className="bg-red-50 border-b border-red-200 px-4 py-2">
           <div className="flex items-center text-red-600">
-            <WifiOff className="w-4 h-4 mr-2" />
-            <span className="text-sm font-medium">서버 연결 끊김</span>
+            {connectionError ? (
+              <>
+                <AlertCircle className="w-4 h-4 mr-2" />
+                <span className="text-sm font-medium">{connectionError}</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-4 h-4 mr-2" />
+                <span className="text-sm font-medium">서버 연결 끊김</span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -37,7 +52,7 @@ const ChatPanel = ({ messages, className, isConnected = true }) => {
               <p className="text-gray-500">
                 {isConnected 
                   ? '대화를 시작해보세요' 
-                  : '서버 연결 대기중...'}
+                  : connectionError || '서버 연결 대기중...'}
               </p>
             </div>
           ) : (
