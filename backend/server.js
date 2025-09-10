@@ -661,6 +661,66 @@ app.post('/api/kanban', authenticateToken, asyncHandler(async (req, res) => {
   res.json(card);
 }));
 
+// =============================================
+// n8n Webhook 엔드포인트
+// =============================================
+app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
+  console.log('[n8n Webhook] Received:', {
+    type: req.body.type,
+    socketId: req.body.socketId,
+    userId: req.body.userId,
+    timestamp: new Date().toISOString()
+  });
+  
+  try {
+    const { socketId, type, data, userId, username } = req.body;
+    
+    // Socket.IO로 특정 클라이언트에게 전송
+    if (socketId && io) {
+      const targetSocket = io.sockets.sockets.get(socketId);
+      
+      if (targetSocket) {
+        // 음성 명령 결과 전송
+        targetSocket.emit('voiceCommandResult', {
+          type,
+          data,
+          timestamp: new Date().toISOString(),
+          source: 'n8n'
+        });
+        
+        console.log(`[n8n Webhook] ✅ Sent to socket ${socketId} (${username || 'unknown'})`);
+        
+        res.json({ 
+          success: true, 
+          message: 'Webhook processed and sent to client',
+          socketId,
+          type,
+          username
+        });
+      } else {
+        console.warn(`[n8n Webhook] ⚠️ Socket ${socketId} not found`);
+        res.status(404).json({ 
+          success: false, 
+          error: 'Socket not found',
+          socketId 
+        });
+      }
+    } else {
+      console.error('[n8n Webhook] ❌ No socket connection');
+      res.status(503).json({ 
+        success: false, 
+        error: 'Socket.IO not available' 
+      });
+    }
+  } catch (error) {
+    console.error('[n8n Webhook] Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+}));
+
 // WebSocket handling with rate limiting
 const voiceCommandLimiter = new Map();
 
