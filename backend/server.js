@@ -15,6 +15,7 @@ require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
+let io; // Socket.IO 인스턴스를 위한 전역 변수 추가
 
 // Environment validation
 const requiredEnvVars = ['JWT_SECRET', 'NODE_ENV'];
