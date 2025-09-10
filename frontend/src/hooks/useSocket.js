@@ -110,6 +110,48 @@ export const useSocket = (userId) => {
           }
         });
 
+        // ⭐ n8n Voice command results - 새로 추가된 이벤트 리스너
+        socketRef.current.on('voiceCommandResult', (result) => {
+          console.log('📢 Voice command result from n8n:', result);
+          setLastMessage(result);
+          
+          // Show success message based on type
+          if (result.type === 'news') {
+            toast.success(`${result.data.articles?.length || 0}개의 뉴스를 찾았습니다`);
+            // Dispatch custom event for components to handle
+            window.dispatchEvent(new CustomEvent('voiceCommandNews', {
+              detail: result.data
+            }));
+          } else if (result.type === 'market') {
+            toast.success('시장 데이터를 가져왔습니다');
+            window.dispatchEvent(new CustomEvent('voiceCommandMarket', {
+              detail: result.data
+            }));
+          } else if (result.type === 'kanban') {
+            toast.success('칸반 보드가 업데이트되었습니다');
+            window.dispatchEvent(new CustomEvent('voiceCommandKanban', {
+              detail: result.data
+            }));
+          } else if (result.type === 'portfolio') {
+            toast.success('포트폴리오 정보를 가져왔습니다');
+            window.dispatchEvent(new CustomEvent('voiceCommandPortfolio', {
+              detail: result.data
+            }));
+          } else if (result.type === 'error') {
+            toast.error(result.data?.message || '명령을 처리할 수 없습니다');
+          }
+          
+          // Debug logging in development
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Voice command result details:', {
+              type: result.type,
+              data: result.data,
+              timestamp: result.timestamp,
+              source: result.source
+            });
+          }
+        });
+
         // Kanban updates
         socketRef.current.on('kanban-update', (update) => {
           console.log('Kanban update:', update);
@@ -125,6 +167,12 @@ export const useSocket = (userId) => {
           console.error('Server error:', error);
           toast.error(error.message || '오류가 발생했습니다');
         });
+
+        // Debug socket in development
+        if (process.env.NODE_ENV === 'development') {
+          window.debugSocket = socketRef.current;
+          console.log('🔧 Debug socket available: window.debugSocket');
+        }
 
       } catch (error) {
         console.error('Failed to create socket connection:', error);
