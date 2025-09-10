@@ -825,9 +825,11 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
     const { socketId, type, data, userId, username } = req.body;
 
     // 디버그 추가
-    console.log('[n8n Webhook] io exists?', !!io);
-    console.log('[n8n Webhook] io type:', typeof io);
-    console.log('[n8n Webhook] io.sockets?', !!io?.sockets);
+    // 디버그 로그를 더 자세히
+    console.log('[n8n Webhook] Debug - io exists?', !!io);
+    console.log('[n8n Webhook] Debug - socketId:', socketId);
+    console.log('[n8n Webhook] Debug - typeof socketId:', typeof socketId);
+    console.log('[n8n Webhook] Debug - io && socketId?', !!(io && socketId));
     
     // Socket.IO로 특정 클라이언트에게 전송
     if (socketId && io) {
