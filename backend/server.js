@@ -171,7 +171,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Socket.io 설정 개선 - 더 견고한 버전
-const io = socketIO(server, {
+io = socketIO(server, {
   cors: {
     origin: function(origin, callback) {
       const allowedOrigins = getAllowedOrigins();
