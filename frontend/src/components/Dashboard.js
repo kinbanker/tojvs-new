@@ -25,6 +25,9 @@ const Dashboard = ({ onLogout }) => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
 
+  // 통합 연결 상태 - customSocket 또는 useSocket 중 하나라도 연결되어 있으면 true
+  const isAnySocketConnected = isCustomSocketConnected || isConnected;
+
   // 소켓 연결 함수들
   const createSocketWithPolling = () => {
     console.log('🔄 Trying Socket.IO with polling transport...');
@@ -112,6 +115,31 @@ const Dashboard = ({ onLogout }) => {
       console.log(`🔄 ${connectionType} reconnected after`, attemptNumber, 'attempts');
       setIsCustomSocketConnected(true);
       toast.success('서버에 재연결되었습니다.');
+    });
+
+    // 커스텀 소켓의 메시지 처리
+    socketInstance.on('command-result', (message) => {
+      console.log('Received result via custom socket:', message);
+      setLastMessage(message);
+      
+      // Show success message based on type
+      if (message.type === 'kanban') {
+        toast.success('칸반 카드가 추가되었습니다');
+      } else if (message.type === 'news') {
+        toast.success('뉴스를 찾았습니다');
+      }
+    });
+
+    socketInstance.on('processing', (status) => {
+      console.log('Processing status:', status);
+      if (status.message) {
+        toast.loading(status.message, { duration: 2000 });
+      }
+    });
+
+    socketInstance.on('error', (error) => {
+      console.error('Server error:', error);
+      toast.error(error.message || '오류가 발생했습니다');
     });
 
     return socketInstance;
@@ -230,10 +258,10 @@ const Dashboard = ({ onLogout }) => {
   }, [lastMessage]);
 
   // 커스텀 소켓을 통한 메시지 송신 함수
-  const sendCustomMessage = (message, type = 'voice_command') => {
+  const sendCustomMessage = (message, type = 'voice-command') => {
     if (customSocket && isCustomSocketConnected) {
       customSocket.emit(type, {
-        message,
+        text: message,
         userId: user.id,
         timestamp: new Date().toISOString()
       });
@@ -352,7 +380,7 @@ const Dashboard = ({ onLogout }) => {
                     )}
                   </div>
                   
-                  {!isCustomSocketConnected && !isConnected && (
+                  {!isAnySocketConnected && (
                     <button
                       onClick={handleManualReconnect}
                       className="mt-3 px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors"
@@ -399,19 +427,29 @@ const Dashboard = ({ onLogout }) => {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">투자비스 AI</h2>
             <div className="flex items-center">
-              <div className={`w-2 h-2 rounded-full ${isConnected || isCustomSocketConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+              <div className={`w-2 h-2 rounded-full ${isAnySocketConnected ? 'bg-green-400' : 'bg-red-400'}`} />
               <span className="ml-2 text-sm text-white opacity-90">
-                {isConnected || isCustomSocketConnected ? '연결됨' : '연결 끊김'}
+                {isAnySocketConnected ? '연결됨' : '연결 끊김'}
               </span>
             </div>
           </div>
         </div>
         
-        <ChatPanel messages={messages} className="flex-1 overflow-y-auto" />
+        <ChatPanel 
+          messages={messages} 
+          className="flex-1 overflow-y-auto"
+          isConnected={isAnySocketConnected}
+          isInitializing={false}
+          isLoading={false}
+          error={null}
+          disabled={false}
+        />
         
         <VoiceRecorder 
           onTranscript={handleVoiceInput}
           className="border-t bg-gray-50"
+          isConnected={isAnySocketConnected}
+          disabled={false}
         />
       </div>
       
