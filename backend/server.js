@@ -831,38 +831,91 @@ if (isProduction) {
 app.use(errorHandler);
 
 // 프로세스 종료 시 Socket.IO 정리
+// 프로세스 종료 시 정리 - 수정된 버전
 process.on('SIGTERM', () => {
-  console.log('🔄 SIGTERM received, closing Socket.IO server...');
-  io.close(() => {
-    console.log('✅ Socket.IO server closed');
-    if (db) {
-      db.close(() => {
-        console.log('✅ Database closed');
+  console.log('🔄 SIGTERM received, shutting down gracefully...');
+  
+  // 1. 먼저 HTTP 서버 닫기 (새로운 연결 거부)
+  server.close(() => {
+    console.log('✅ HTTP server closed');
+    
+    // 2. Socket.IO 서버 닫기
+    io.close(() => {
+      console.log('✅ Socket.IO server closed');
+      
+      // 3. 데이터베이스 연결 닫기
+      if (db) {
+        db.close()
+          .then(() => {
+            console.log('✅ Database closed');
+            process.exit(0);
+          })
+          .catch(err => {
+            console.error('❌ Database close error:', err);
+            process.exit(1);
+          });
+      } else {
         process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
+      }
+    });
   });
+  
+  // 30초 후에도 종료되지 않으면 강제 종료
+  setTimeout(() => {
+    console.error('❌ Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 30000);
 });
 
 process.on('SIGINT', () => {
-  console.log('🔄 SIGINT received, closing Socket.IO server...');
-  io.close(() => {
-    console.log('✅ Socket.IO server closed');
-    if (db) {
-      db.close(() => {
-        console.log('✅ Database closed');
+  console.log('🔄 SIGINT received, shutting down gracefully...');
+  
+  // 1. 먼저 HTTP 서버 닫기 (새로운 연결 거부)
+  server.close(() => {
+    console.log('✅ HTTP server closed');
+    
+    // 2. Socket.IO 서버 닫기
+    io.close(() => {
+      console.log('✅ Socket.IO server closed');
+      
+      // 3. 데이터베이스 연결 닫기
+      if (db) {
+        db.close()
+          .then(() => {
+            console.log('✅ Database closed');
+            process.exit(0);
+          })
+          .catch(err => {
+            console.error('❌ Database close error:', err);
+            process.exit(1);
+          });
+      } else {
         process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
+      }
+    });
   });
+  
+  // 30초 후에도 종료되지 않으면 강제 종료
+  setTimeout(() => {
+    console.error('❌ Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 30000);
 });
 
-// Start server
+// PM2를 위한 ready 신호 (선택사항)
+process.on('ready', () => {
+  if (process.send) {
+    process.send('ready');
+  }
+});
+
+// 서버 시작 부분도 수정하여 PM2에 ready 신호 보내기
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${NODE_ENV} mode`);
   console.log(`Allowed domains: ${ALLOWED_DOMAINS.join(', ')}`);
+  
+  // PM2에 ready 신호 전송
+  if (process.send) {
+    process.send('ready');
+  }
 });
