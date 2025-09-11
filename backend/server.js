@@ -286,19 +286,62 @@ async function initDb() {
       )
     `);
 
-    // 🔥 voice_commands 테이블에 command_id 추가
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS voice_commands (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        command_id TEXT UNIQUE NOT NULL,
-        user_id INTEGER NOT NULL,
-        command_text TEXT NOT NULL CHECK(length(command_text) <= 1000),
-        intent_type TEXT,
-        processed BOOLEAN DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-      )
-    `);
+    // 🔥 기존 voice_commands 테이블 확인 및 마이그레이션
+    const tableInfo = await db.all(`PRAGMA table_info(voice_commands)`);
+    const hasCommandIdColumn = tableInfo.some(col => col.name === 'command_id');
+    
+    if (tableInfo.length > 0 && !hasCommandIdColumn) {
+      console.log('🔄 Migrating voice_commands table to add command_id column...');
+      
+      // 기존 데이터 백업
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS voice_commands_backup AS 
+        SELECT * FROM voice_commands
+      `);
+      
+      // 기존 테이블 삭제
+      await db.exec(`DROP TABLE IF EXISTS voice_commands`);
+      
+      // 새 스키마로 테이블 생성
+      await db.exec(`
+        CREATE TABLE voice_commands (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          command_id TEXT UNIQUE,
+          user_id INTEGER NOT NULL,
+          command_text TEXT NOT NULL CHECK(length(command_text) <= 1000),
+          intent_type TEXT,
+          processed BOOLEAN DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+      `);
+      
+      // 백업 데이터 복원 (command_id는 NULL로 설정)
+      await db.exec(`
+        INSERT INTO voice_commands (user_id, command_text, intent_type, processed, created_at)
+        SELECT user_id, command_text, intent_type, processed, created_at
+        FROM voice_commands_backup
+      `);
+      
+      // 백업 테이블 삭제
+      await db.exec(`DROP TABLE IF EXISTS voice_commands_backup`);
+      
+      console.log('✅ Migration completed successfully');
+    } else if (tableInfo.length === 0) {
+      // 테이블이 없으면 새로 생성
+      await db.exec(`
+        CREATE TABLE voice_commands (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          command_id TEXT UNIQUE,
+          user_id INTEGER NOT NULL,
+          command_text TEXT NOT NULL CHECK(length(command_text) <= 1000),
+          intent_type TEXT,
+          processed BOOLEAN DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+      `);
+    }
 
     // Create indexes
     await db.exec(`
@@ -325,9 +368,18 @@ async function initDb() {
       }
     }
 
-    console.log('Database initialized successfully');
+    console.log('✅ Database initialized successfully');
   } catch (error) {
-    console.error('Database initialization error:', error);
+    console.error('❌ Database initialization error:', error);
+    
+    // 테이블 정보 출력 (디버깅용)
+    try {
+      const tables = await db.all(`SELECT name FROM sqlite_master WHERE type='table'`);
+      console.log('Existing tables:', tables.map(t => t.name));
+    } catch (e) {
+      console.error('Could not list tables:', e);
+    }
+    
     process.exit(1);
   }
 }
@@ -437,12 +489,12 @@ function emitToUser(userId, event, data) {
       const socket = io.sockets.sockets.get(socketId);
       if (socket) {
         socket.emit(event, data);
-        console.log(`Emitted ${event} to socket ${socketId} for user ${userId}`);
+        console.log(`✅ Emitted ${event} to socket ${socketId} for user ${userId}`);
       }
     });
     return true;
   }
-  console.log(`No active sockets found for user ${userId}`);
+  console.log(`⚠️ No active sockets found for user ${userId}`);
   return false;
 }
 
@@ -736,6 +788,8 @@ io.on('connection', (socket) => {
   userSocketMap.get(userId).add(socket.id);
   socketUserMap.set(socket.id, { userId, username });
   
+  console.log(`📊 User ${username} (${userId}) now has ${userSocketMap.get(userId).size} active connection(s)`);
+  
   // Transport upgrade detection
   socket.conn.on('upgrade', () => {
     console.log(`🚀 Socket ${socket.id} upgraded to: ${socket.conn.transport.name}`);
@@ -777,13 +831,14 @@ io.on('connection', (socket) => {
       });
     }
     
-    console.log(`Voice command from ${username} (User ID: ${userId}): ${text}`);
+    console.log(`🎤 Voice command from ${username} (User ID: ${userId}): ${text}`);
 
     try {
       // 🔥 Generate unique command ID
       const commandId = `cmd_${userId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      console.log(`📝 Generated command ID: ${commandId}`);
       
-      // Save to database with command ID
+      // Save to database with command ID (command_id can be NULL for backward compatibility)
       await db.run(
         'INSERT INTO voice_commands (command_id, user_id, command_text) VALUES (?, ?, ?)',
         commandId, userId, text
@@ -795,18 +850,23 @@ io.on('connection', (socket) => {
         username,
         timestamp: new Date().toISOString()
       });
+      console.log(`📦 Stored pending command: ${commandId}`);
 
       // Process with n8n if configured
       if (N8N_WEBHOOK_URL) {
         try {
-          await axios.post(N8N_WEBHOOK_URL, {
+          const n8nPayload = {
             text,
-            commandId,  // 🔥 Use commandId instead of socketId
+            commandId,  // 🔥 Use commandId
             userId,
             username,
             socketId: socket.id, // Still send socketId as fallback
             timestamp: new Date().toISOString()
-          }, {
+          };
+          
+          console.log(`📤 Sending to n8n:`, n8nPayload);
+          
+          await axios.post(N8N_WEBHOOK_URL, n8nPayload, {
             timeout: 10000,
             headers: { 'Content-Type': 'application/json' }
           });
@@ -823,11 +883,12 @@ io.on('connection', (socket) => {
           for (const [cmdId, cmdData] of pendingCommands.entries()) {
             if (new Date(cmdData.timestamp).getTime() < fiveMinutesAgo) {
               pendingCommands.delete(cmdId);
+              console.log(`🗑️ Cleaned up old command: ${cmdId}`);
             }
           }
 
         } catch (error) {
-          console.error('n8n webhook error:', error.message);
+          console.error('❌ n8n webhook error:', error.message);
           
           // Fallback: Process locally for basic commands
           const lowerText = text.toLowerCase();
@@ -871,7 +932,7 @@ io.on('connection', (socket) => {
         });
       }
     } catch (error) {
-      console.error('Voice command error:', error);
+      console.error('❌ Voice command error:', error);
       socket.emit('error', { 
         message: '명령 처리 중 오류가 발생했습니다.' 
       });
@@ -911,7 +972,9 @@ io.on('connection', (socket) => {
       userSockets.delete(socket.id);
       if (userSockets.size === 0) {
         userSocketMap.delete(userId);
-        console.log(`User ${username} (ID: ${userId}) has no more active connections`);
+        console.log(`👤 User ${username} (ID: ${userId}) has no more active connections`);
+      } else {
+        console.log(`📊 User ${username} (${userId}) still has ${userSockets.size} connection(s)`);
       }
     }
     socketUserMap.delete(socket.id);
@@ -932,12 +995,21 @@ io.engine.on("connection_error", (err) => {
 app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
   const { commandId, socketId, userId: requestUserId, type, data } = req.body;
   
-  console.log('[n8n Webhook] Received:', {
+  console.log('📥 [n8n Webhook] Received:', {
     commandId,
     socketId,
     requestUserId,
     type,
     timestamp: new Date().toISOString()
+  });
+  
+  // Debug info
+  console.log('🔍 [n8n Webhook] Current state:', {
+    pendingCommandsSize: pendingCommands.size,
+    userSocketMapSize: userSocketMap.size,
+    socketUserMapSize: socketUserMap.size,
+    ioExists: !!io,
+    ioSocketsSize: io ? io.sockets.sockets.size : 0
   });
   
   let targetUserId = null;
@@ -947,21 +1019,29 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
     // Method 1: Use commandId to find user (most reliable)
     const commandData = pendingCommands.get(commandId);
     targetUserId = commandData.userId;
-    console.log(`[n8n Webhook] Found user ${targetUserId} via commandId ${commandId}`);
+    console.log(`✅ [n8n Webhook] Found user ${targetUserId} via commandId ${commandId}`);
     pendingCommands.delete(commandId);
   } else if (socketId && socketUserMap.has(socketId)) {
     // Method 2: Try socketId (might be stale)
     const socketData = socketUserMap.get(socketId);
     targetUserId = socketData.userId;
-    console.log(`[n8n Webhook] Found user ${targetUserId} via socketId ${socketId}`);
+    console.log(`✅ [n8n Webhook] Found user ${targetUserId} via socketId ${socketId}`);
   } else if (requestUserId) {
     // Method 3: Use userId from request
     targetUserId = requestUserId;
-    console.log(`[n8n Webhook] Using userId ${targetUserId} from request`);
+    console.log(`✅ [n8n Webhook] Using userId ${targetUserId} from request`);
   }
   
   if (!targetUserId) {
-    console.error('[n8n Webhook] Could not identify target user');
+    console.error('❌ [n8n Webhook] Could not identify target user');
+    console.error('Debug info:', {
+      commandId,
+      socketId,
+      requestUserId,
+      pendingCommandIds: Array.from(pendingCommands.keys()),
+      socketIds: Array.from(socketUserMap.keys())
+    });
+    
     return res.status(400).json({ 
       success: false, 
       error: 'User identification failed',
@@ -970,12 +1050,12 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
   }
   
   // Handle different result types
-  if (type === 'kanban' && data.action === 'ADD_CARD') {
+  if (type === 'kanban' && data && data.action === 'ADD_CARD') {
     try {
       // Save to database
       const result = await db.run(
         'INSERT INTO kanban_cards (user_id, ticker, price, quantity, column_id) VALUES (?, ?, ?, ?, ?)',
-        targetUserId, data.card.ticker, data.card.price, data.card.quantity, data.card.column
+        targetUserId, data.card.ticker, data.card.price, data.card.quantity, data.card.column || 'buy-wait'
       );
       
       data.card.id = result.lastID;
@@ -1004,12 +1084,11 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
       });
       
       if (!sent) {
-        console.log(`[n8n Webhook] User ${targetUserId} has no active connections, storing for later`);
-        // TODO: Consider storing in database for later retrieval
+        console.log(`⚠️ [n8n Webhook] User ${targetUserId} has no active connections`);
       }
       
     } catch (error) {
-      console.error('[n8n Webhook] Error processing kanban result:', error);
+      console.error('❌ [n8n Webhook] Error processing kanban result:', error);
       return res.status(500).json({ 
         success: false, 
         error: 'Database error',
@@ -1018,7 +1097,7 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
     }
   } else {
     // Generic result handling
-    emitToUser(targetUserId, 'command-result', {
+    const sent = emitToUser(targetUserId, 'command-result', {
       type,
       data,
       timestamp: new Date().toISOString()
@@ -1031,6 +1110,10 @@ app.post('/webhook/n8n-result', asyncHandler(async (req, res) => {
       timestamp: new Date().toISOString(),
       source: 'n8n'
     });
+    
+    if (!sent) {
+      console.log(`⚠️ [n8n Webhook] User ${targetUserId} has no active connections`);
+    }
   }
   
   res.json({ 
@@ -1064,7 +1147,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     connections: {
-      total: io.sockets.sockets.size,
+      total: io ? io.sockets.sockets.size : 0,
       users: userSocketMap.size,
       sockets: socketUserMap.size,
       userDetails: Array.from(userSocketMap.entries()).map(([userId, sockets]) => ({
@@ -1168,7 +1251,7 @@ server.listen(PORT, () => {
   ========================================
   Environment: ${NODE_ENV}
   Port: ${PORT}
-  Database: SQLite
+  Database: SQLite (with auto-migration)
   WebSocket: Enabled (with Command ID tracking)
   n8n Webhook: ${N8N_WEBHOOK_URL || 'Not configured'}
   Allowed Domains: ${ALLOWED_DOMAINS.join(', ')}
