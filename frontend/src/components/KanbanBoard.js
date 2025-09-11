@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
-import apiUtils from '../utils/api'; // ✅ axios 대신 apiUtils 사용
+import apiUtils from '../utils/api';
 
-const KanbanBoard = ({ socket }) => {
+const KanbanBoard = ({ socket, lastMessage }) => {  // lastMessage prop 추가
   const [columns, setColumns] = useState({
     'buy-wait': { id: 'buy-wait', title: '매수대기', cards: [] },
     'buy-done': { id: 'buy-done', title: '매수완료', cards: [] },
@@ -14,12 +14,40 @@ const KanbanBoard = ({ socket }) => {
     loadCards();
   }, []);
 
+  // n8n command-result 처리 추가
+  useEffect(() => {
+    if (lastMessage && lastMessage.type === 'kanban' && lastMessage.data) {
+      const { action, card } = lastMessage.data;
+      
+      if (action === 'ADD_CARD' && card) {
+        console.log('Adding card from n8n:', card);
+        
+        // column을 column_id로 매핑
+        const normalizedCard = {
+          id: card.id || `card-${Date.now()}`,
+          ticker: card.ticker,
+          price: card.price,
+          quantity: card.quantity,
+          column_id: card.column || card.column_id,  // column 또는 column_id 처리
+          notes: card.notes,
+          created_at: card.createdAt || new Date().toISOString(),
+          user_id: card.userId,
+          username: card.username
+        };
+        
+        addCard(normalizedCard.column_id, normalizedCard);
+      }
+    }
+  }, [lastMessage]);
+
   useEffect(() => {
     if (!socket) return;
 
     const handleKanbanUpdate = (update) => {
+      console.log('Kanban update received:', update);
+      
       if (update.type === 'ADD') {
-        addCard(update.columnId, update.card);
+        addCard(update.columnId || update.column_id, update.card);
       } else if (update.type === 'MOVE') {
         moveCard(update.cardId, update.fromColumn, update.toColumn);
       }
@@ -32,7 +60,6 @@ const KanbanBoard = ({ socket }) => {
     };
   }, [socket]);
 
-  // ✅ 서버에서 카드 불러오기
   const loadCards = async () => {
     try {
       const response = await apiUtils.getKanbanCards();
@@ -44,7 +71,10 @@ const KanbanBoard = ({ socket }) => {
         'sell-done': []
       };
       
-      response.data.forEach(card => {
+      // response.data가 배열인지 확인
+      const cards = Array.isArray(response.data) ? response.data : response.data.cards || [];
+      
+      cards.forEach(card => {
         if (cardsByColumn[card.column_id]) {
           cardsByColumn[card.column_id].push(card);
         }
@@ -63,13 +93,30 @@ const KanbanBoard = ({ socket }) => {
   };
 
   const addCard = (columnId, card) => {
-    setColumns(prev => ({
-      ...prev,
-      [columnId]: {
-        ...prev[columnId],
-        cards: [...prev[columnId].cards, card]
+    console.log('Adding card to column:', columnId, card);
+    
+    setColumns(prev => {
+      // columnId 유효성 검사
+      if (!prev[columnId]) {
+        console.error('Invalid column ID:', columnId);
+        return prev;
       }
-    }));
+      
+      // 중복 확인
+      const isDuplicate = prev[columnId].cards.some(c => c.id === card.id);
+      if (isDuplicate) {
+        console.log('Card already exists:', card.id);
+        return prev;
+      }
+      
+      return {
+        ...prev,
+        [columnId]: {
+          ...prev[columnId],
+          cards: [...prev[columnId].cards, card]
+        }
+      };
+    });
   };
 
   const moveCard = (cardId, fromColumn, toColumn) => {
@@ -117,7 +164,9 @@ const KanbanBoard = ({ socket }) => {
         <div className="grid grid-cols-4 gap-4">
           {Object.values(columns).map(column => (
             <div key={column.id} className="bg-gray-100 rounded-lg p-4">
-              <h3 className="font-semibold mb-3 text-gray-700">{column.title}</h3>
+              <h3 className="font-semibold mb-3 text-gray-700">
+                {column.title} ({column.cards.length})
+              </h3>
               
               <Droppable droppableId={column.id}>
                 {(provided, snapshot) => (
@@ -147,8 +196,13 @@ const KanbanBoard = ({ socket }) => {
                             <div className="text-sm text-gray-600">
                               ${card.price} × {card.quantity}주
                             </div>
-                            <div className="text-xs text-gray-500 mt-1">
-                              {new Date(card.created_at).toLocaleTimeString()}
+                            {card.notes && (
+                              <div className="text-xs text-gray-500 mt-1 italic">
+                                {card.notes}
+                              </div>
+                            )}
+                            <div className="text-xs text-gray-400 mt-1">
+                              {new Date(card.created_at || card.createdAt).toLocaleTimeString()}
                             </div>
                           </div>
                         )}
