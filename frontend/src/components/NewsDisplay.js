@@ -1,6 +1,11 @@
 import React, { useMemo } from 'react';
 import { ExternalLink, Calendar, User, Loader2 } from 'lucide-react';
 
+// Helper function to handle different data structures
+const getArticles = (data) => {
+  return data?.articles || data?.news || data?.items || [];
+};
+
 const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = null }) => {
   // Memoize newsData to prevent unnecessary re-renders
   const newsData = useMemo(() => data, [data]);
@@ -33,12 +38,20 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
     );
   }
 
+  // Get articles from various possible data structures
+  const articles = getArticles(newsData);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold mb-2">뉴스 검색 결과</h2>
-          <p className="text-gray-600">키워드: {newsData.keyword || '없음'}</p>
+          <p className="text-gray-600">
+            키워드: {newsData.keyword || newsData.ticker || '없음'}
+            {newsData.message && (
+              <span className="ml-2 text-sm text-gray-500">({newsData.message})</span>
+            )}
+          </p>
         </div>
         {/* Connection status indicator */}
         <div
@@ -52,11 +65,13 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
         </div>
       </div>
 
-      {newsData.news && newsData.news.length > 0 && (
+      {articles.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">최신 뉴스</h3>
+          <h3 className="text-lg font-semibold mb-4">
+            최신 뉴스 ({articles.length}건)
+          </h3>
           <div className="grid gap-4">
-            {newsData.news.map((item, index) => (
+            {articles.map((item, index) => (
               <div
                 key={index}
                 className="bg-white p-4 rounded-lg shadow-sm border hover:shadow-md transition"
@@ -65,22 +80,32 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
                 <p className="text-gray-600 text-sm mb-3">{item.description}</p>
                 <div className="flex items-center justify-between text-xs text-gray-500">
                   <div className="flex items-center space-x-4">
-                    <span className="flex items-center">
-                      <Calendar className="w-3 h-3 mr-1" />
-                      {new Date(item.publishedAt).toLocaleDateString()}
-                    </span>
-                    <span>{item.source}</span>
+                    {item.publishedAt && (
+                      <span className="flex items-center">
+                        <Calendar className="w-3 h-3 mr-1" />
+                        {new Date(item.publishedAt).toLocaleDateString('ko-KR', {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    )}
+                    {item.source && <span>{item.source}</span>}
                   </div>
-                  <a
-                    href={item.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center text-blue-500 hover:text-blue-600"
-                    aria-label={`${item.title} 자세히 보기`}
-                  >
-                    <ExternalLink className="w-3 h-3 mr-1" />
-                    자세히 보기
-                  </a>
+                  {item.url && (
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center text-blue-500 hover:text-blue-600"
+                      aria-label={`${item.title} 자세히 보기`}
+                    >
+                      <ExternalLink className="w-3 h-3 mr-1" />
+                      자세히 보기
+                    </a>
+                  )}
                 </div>
               </div>
             ))}
@@ -90,7 +115,9 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
 
       {newsData.tweets && newsData.tweets.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">소셜 미디어</h3>
+          <h3 className="text-lg font-semibold mb-4">
+            소셜 미디어 ({newsData.tweets.length}건)
+          </h3>
           <div className="grid gap-4">
             {newsData.tweets.map((tweet, index) => (
               <div key={index} className="bg-white p-4 rounded-lg shadow-sm border">
@@ -101,11 +128,21 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
                 </div>
                 <p className="text-gray-700 text-sm">{tweet.text}</p>
                 <p className="text-xs text-gray-500 mt-2">
-                  {new Date(tweet.createdAt).toLocaleString()}
+                  {new Date(tweet.createdAt).toLocaleString('ko-KR')}
                 </p>
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Show message when no articles found */}
+      {articles.length === 0 && !newsData.tweets?.length && (
+        <div className="text-center py-10 text-gray-500">
+          <p>검색 결과가 없습니다.</p>
+          {newsData.error && (
+            <p className="text-sm text-red-500 mt-2">{newsData.error}</p>
+          )}
         </div>
       )}
     </div>
