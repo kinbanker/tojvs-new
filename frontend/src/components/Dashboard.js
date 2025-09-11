@@ -8,7 +8,7 @@ import VoiceRecorder from './VoiceRecorder';
 import ChatPanel from './ChatPanel';
 import KanbanBoard from './KanbanBoard';
 import NewsDisplay from './NewsDisplay';
-import MarketDisplay from './MarketDisplay';  // 추가
+import MarketDisplay from './MarketDisplay';
 import PlanManagement from './PlanManagement';
 import Profile from './Profile';
 import apiUtils from '../utils/api';
@@ -27,12 +27,13 @@ const Dashboard = ({ onLogout }) => {
   // 중복 처리 방지를 위한 ref
   const lastProcessedMessageId = useRef(null);
   const processingMessage = useRef(false);
-  const toastIdRef = useRef(null);  // Toast ID 추적
+  const toastIdRef = useRef(null);
+  const lastMessageIdRef = useRef(null); // 마지막 처리한 메시지 ID 추적
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
 
-  // 통합 연결 상태 - customSocket 또는 useSocket 중 하나라도 연결되어 있으면 true
+  // 통합 연결 상태
   const isAnySocketConnected = isCustomSocketConnected || isConnected;
 
   // Toast 정리 함수
@@ -40,10 +41,13 @@ const Dashboard = ({ onLogout }) => {
     toast.dismiss();
   };
 
-  // 메뉴 변경 시 Toast 정리
+  // 메뉴 변경 시 처리
   useEffect(() => {
     if (activeMenu !== 'home') {
       clearAllToasts();
+      // 홈이 아닌 경우 메시지 처리 초기화
+      setCustomSocketMessage(null);
+      lastProcessedMessageId.current = null;
     }
   }, [activeMenu]);
 
@@ -113,7 +117,7 @@ const Dashboard = ({ onLogout }) => {
       console.log(`✅ ${connectionType} socket connected:`, socketInstance.id);
       setIsCustomSocketConnected(true);
       setConnectionAttempts(0);
-      if (activeMenu === 'home') {  // 홈 화면에서만 toast 표시
+      if (activeMenu === 'home') {
         toast.success(`서버에 연결되었습니다 (${connectionType})`);
       }
     });
@@ -144,8 +148,8 @@ const Dashboard = ({ onLogout }) => {
     socketInstance.on('command-result', (message) => {
       console.log('Received result via custom socket:', message);
       
-      // 메시지 ID 생성 (timestamp + type 조합)
-      const messageId = `${message.timestamp}_${message.type}`;
+      // 고유 메시지 ID 생성
+      const messageId = `${message.timestamp}_${message.type}_${message.commandId || ''}`;
       
       // 이미 처리한 메시지인지 확인
       if (lastProcessedMessageId.current === messageId) {
@@ -153,31 +157,34 @@ const Dashboard = ({ onLogout }) => {
         return;
       }
       
-      lastProcessedMessageId.current = messageId;
-      setCustomSocketMessage(message);
+      // 홈 화면일 때만 메시지 처리
+      if (activeMenu === 'home') {
+        lastProcessedMessageId.current = messageId;
+        setCustomSocketMessage(message);
+      }
     });
 
-    // voiceCommandResult 이벤트도 처리 (n8n에서 오는 이벤트)
+    // voiceCommandResult 이벤트도 처리
     socketInstance.on('voiceCommandResult', (result) => {
-      console.log('Received result:', result);
       console.log('📢 Voice command result from n8n:', result);
       
-      // command-result와 동일하게 처리
-      const messageId = `${result.timestamp}_${result.type}`;
+      const messageId = `${result.timestamp}_${result.type}_${result.commandId || ''}`;
       if (lastProcessedMessageId.current === messageId) {
         console.log('Duplicate voiceCommandResult detected, skipping:', messageId);
         return;
       }
       
-      lastProcessedMessageId.current = messageId;
-      setCustomSocketMessage(result);
+      // 홈 화면일 때만 메시지 처리
+      if (activeMenu === 'home') {
+        lastProcessedMessageId.current = messageId;
+        setCustomSocketMessage(result);
+      }
     });
 
-    // processing 이벤트 처리 개선 (중복 방지)
+    // processing 이벤트 처리 개선
     socketInstance.on('processing', (status) => {
       console.log('Processing status:', status);
       if (status.message && activeMenu === 'home') {
-        // 이전 processing toast가 있으면 제거
         if (toastIdRef.current) {
           toast.dismiss(toastIdRef.current);
         }
@@ -264,7 +271,7 @@ const Dashboard = ({ onLogout }) => {
         customSocket.disconnect();
         console.log('🔌 Custom socket disconnected on unmount');
       }
-      clearAllToasts();  // 컴포넌트 언마운트 시 Toast 정리
+      clearAllToasts();
     };
   }, [user.id, connectionAttempts]);
 
@@ -280,73 +287,72 @@ const Dashboard = ({ onLogout }) => {
 
   // 커스텀 소켓 메시지 처리 (중복 방지 개선)
   useEffect(() => {
-    if (customSocketMessage && !processingMessage.current) {
-      processingMessage.current = true;
-      const { type, data } = customSocketMessage;
-      
-      // Toast 메시지 한 번만 표시 (이전 toast 제거)
-      if (activeMenu === 'home') {
-        // 이전 toast 제거
-        if (toastIdRef.current) {
-          toast.dismiss(toastIdRef.current);
-          toastIdRef.current = null;
-        }
-        
-        switch(type) {
-          case 'news':
-            const articleCount = data?.articles?.length || 0;
-            if (articleCount > 0) {
-              toastIdRef.current = toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
-            }
-            break;
-          case 'kanban':
-            toastIdRef.current = toast.success('칸반 카드가 추가되었습니다');
-            break;
-          case 'market':
-            toastIdRef.current = toast.success('시장 데이터를 불러왔습니다');
-            break;
-        }
-      }
-      
-      // 뷰 업데이트
-      switch(type) {
-        case 'news':
+    // 홈 화면이 아니거나 이미 처리중이면 스킵
+    if (activeMenu !== 'home' || !customSocketMessage || processingMessage.current) {
+      return;
+    }
+    
+    const { type, data, timestamp, commandId } = customSocketMessage;
+    
+    // 고유 ID 생성
+    const messageUniqueId = `${timestamp}_${type}_${commandId || Date.now()}`;
+    
+    // 이미 처리한 메시지면 스킵
+    if (lastMessageIdRef.current === messageUniqueId) {
+      console.log('Message already processed:', messageUniqueId);
+      return;
+    }
+    
+    processingMessage.current = true;
+    lastMessageIdRef.current = messageUniqueId;
+    
+    // Toast 메시지 표시 (이전 toast 제거)
+    if (toastIdRef.current) {
+      toast.dismiss(toastIdRef.current);
+      toastIdRef.current = null;
+    }
+    
+    switch(type) {
+      case 'news':
+        const articleCount = data?.articles?.length || 0;
+        if (articleCount > 0) {
+          toastIdRef.current = toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
           setCurrentView('news');
           setViewData(data);
-          addMessage(`뉴스를 찾았습니다: ${data.keyword || data.ticker}`, 'system');
-          break;
-          
-        case 'kanban':
+          addMessage(`뉴스를 찾았습니다: ${data.keyword || data.ticker}`, 'system', messageUniqueId);
+        }
+        break;
+        
+      case 'kanban':
+        if (data.action === 'ADD_CARD') {
+          toastIdRef.current = toast.success('칸반 카드가 추가되었습니다');
           setCurrentView('kanban');
-          if (data.action === 'ADD_CARD') {
-            addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system');
-          }
-          break;
-          
-        case 'market':
-          setCurrentView('market');
-          setViewData(data);
-          addMessage(`${data.name || data.ticker}: $${data.price?.toLocaleString()}`, 'system');
-          break;
-          
-        case 'chart':
-          setCurrentView('chart');
-          setViewData(data);
-          break;
-          
-        default:
-          break;
-      }
-      
-      // 메시지 처리 완료
-      setTimeout(() => {
-        processingMessage.current = false;
-      }, 100);
+          // 메시지 추가 시 고유 ID 사용
+          addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system', messageUniqueId);
+        }
+        break;
+        
+      case 'market':
+        toastIdRef.current = toast.success('시장 데이터를 불러왔습니다');
+        setCurrentView('market');
+        setViewData(data);
+        addMessage(`${data.name || data.ticker}: $${data.price?.toLocaleString()}`, 'system', messageUniqueId);
+        break;
+        
+      case 'chart':
+        setCurrentView('chart');
+        setViewData(data);
+        break;
+        
+      default:
+        break;
     }
+    
+    // 메시지 처리 완료
+    setTimeout(() => {
+      processingMessage.current = false;
+    }, 100);
   }, [customSocketMessage, activeMenu]);
-
-  // 기존 useSocket 훅의 lastMessage 처리 제거 (중복 방지)
-  // 이미 customSocket에서 처리하므로 제거
 
   // 커스텀 소켓을 통한 메시지 송신 함수
   const sendCustomMessage = (message, type = 'voice-command') => {
@@ -365,9 +371,16 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  const addMessage = (text, sender = 'user') => {
+  // 메시지 추가 함수 (중복 방지 개선)
+  const addMessage = (text, sender = 'user', messageId = null) => {
     setMessages(prev => {
-      // 중복 메시지 방지
+      // messageId로 중복 체크
+      if (messageId && prev.some(msg => msg.messageId === messageId)) {
+        console.log('Duplicate chat message prevented:', messageId);
+        return prev;
+      }
+      
+      // 같은 텍스트가 1초 이내에 추가되는 것 방지
       const lastMessage = prev[prev.length - 1];
       if (lastMessage && lastMessage.text === text && 
           new Date() - lastMessage.timestamp < 1000) {
@@ -376,6 +389,7 @@ const Dashboard = ({ onLogout }) => {
       
       return [...prev, {
         id: Date.now(),
+        messageId: messageId,
         text,
         sender,
         timestamp: new Date()
@@ -400,7 +414,7 @@ const Dashboard = ({ onLogout }) => {
 
   // 로그아웃 개선
   const handleLogout = async () => {
-    clearAllToasts();  // 로그아웃 시 모든 Toast 정리
+    clearAllToasts();
     
     try {
       await apiUtils.logout();
@@ -533,7 +547,7 @@ const Dashboard = ({ onLogout }) => {
           >
             <KanbanBoard 
               socket={customSocket || socket} 
-              lastMessage={customSocketMessage || lastMessage}  // lastMessage prop 추가
+              lastMessage={customSocketMessage || lastMessage}
             />
           </motion.div>
         )}
@@ -582,7 +596,13 @@ const Dashboard = ({ onLogout }) => {
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-1">
               <button
-                onClick={() => { setActiveMenu('home'); clearAllToasts(); }}
+                onClick={() => { 
+                  setActiveMenu('home'); 
+                  clearAllToasts();
+                  // 홈으로 돌아올 때 메시지 처리 상태 초기화
+                  lastProcessedMessageId.current = null;
+                  lastMessageIdRef.current = null;
+                }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'home' 
                     ? 'bg-blue-50 text-blue-600' 
@@ -593,7 +613,10 @@ const Dashboard = ({ onLogout }) => {
                 홈
               </button>
               <button
-                onClick={() => { setActiveMenu('plan'); clearAllToasts(); }}
+                onClick={() => { 
+                  setActiveMenu('plan'); 
+                  clearAllToasts(); 
+                }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'plan' 
                     ? 'bg-blue-50 text-blue-600' 
@@ -604,7 +627,10 @@ const Dashboard = ({ onLogout }) => {
                 플랜관리
               </button>
               <button
-                onClick={() => { setActiveMenu('profile'); clearAllToasts(); }}
+                onClick={() => { 
+                  setActiveMenu('profile'); 
+                  clearAllToasts(); 
+                }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'profile' 
                     ? 'bg-blue-50 text-blue-600' 
