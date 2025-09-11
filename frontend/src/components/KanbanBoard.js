@@ -179,21 +179,35 @@ const KanbanBoard = ({ socket, lastMessage }) => {
     });
   };
 
-  const onDragEnd = (result) => {
+  const onDragEnd = async (result) => {
     const { source, destination, draggableId } = result;
     
     if (!destination) return;
     if (source.droppableId === destination.droppableId && 
         source.index === destination.index) return;
     
+    // 로컬 상태 업데이트
     moveCard(draggableId, source.droppableId, destination.droppableId);
     
-    if (socket) {
-      socket.emit('move-card', {
-        cardId: draggableId,
-        fromColumn: source.droppableId,
-        toColumn: destination.droppableId
+    // 서버에 업데이트
+    try {
+      await apiUtils.updateKanbanCard(draggableId, {
+        column_id: destination.droppableId
       });
+      
+      // Socket으로 다른 클라이언트에 알림
+      if (socket) {
+        socket.emit('move-card', {
+          cardId: draggableId,
+          fromColumn: source.droppableId,
+          toColumn: destination.droppableId
+        });
+      }
+    } catch (error) {
+      console.error('Failed to update card position:', error);
+      // 실패 시 원래 위치로 롤백
+      moveCard(draggableId, destination.droppableId, source.droppableId);
+      toast.error('카드 이동에 실패했습니다');
     }
   };
 
@@ -223,18 +237,19 @@ const KanbanBoard = ({ socket, lastMessage }) => {
   // 편집 저장
   const saveEdit = async (cardId, columnId) => {
     try {
+      // 입력값 검증
+      if (!editForm.ticker || !editForm.price || !editForm.quantity) {
+        toast.error('필수 항목을 모두 입력해주세요');
+        return;
+      }
+
       // API 호출하여 서버에 업데이트
-      const token = localStorage.getItem('token');
-      await apiUtils.request(`/api/kanban/${cardId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          ...editForm,
-          column_id: columnId
-        })
+      await apiUtils.updateKanbanCard(cardId, {
+        ticker: editForm.ticker.toUpperCase(),
+        price: parseFloat(editForm.price),
+        quantity: parseInt(editForm.quantity),
+        notes: editForm.notes,
+        column_id: columnId
       });
 
       // 로컬 상태 업데이트
@@ -246,7 +261,10 @@ const KanbanBoard = ({ socket, lastMessage }) => {
         if (cardIndex !== -1) {
           column.cards[cardIndex] = {
             ...column.cards[cardIndex],
-            ...editForm
+            ticker: editForm.ticker.toUpperCase(),
+            price: parseFloat(editForm.price),
+            quantity: parseInt(editForm.quantity),
+            notes: editForm.notes
           };
         }
         
@@ -257,7 +275,7 @@ const KanbanBoard = ({ socket, lastMessage }) => {
       cancelEdit();
     } catch (error) {
       console.error('Failed to update card:', error);
-      toast.error('카드 수정에 실패했습니다');
+      // apiUtils의 인터셉터가 에러 메시지를 처리하므로 추가 toast 불필요
     }
   };
 
@@ -271,13 +289,7 @@ const KanbanBoard = ({ socket, lastMessage }) => {
 
     try {
       // API 호출하여 서버에서 삭제
-      const token = localStorage.getItem('token');
-      await apiUtils.request(`/api/kanban/${cardId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      await apiUtils.deleteKanbanCard(cardId);
 
       // 로컬 상태에서 제거
       setColumns(prev => ({
@@ -291,7 +303,7 @@ const KanbanBoard = ({ socket, lastMessage }) => {
       toast.success('카드가 삭제되었습니다');
     } catch (error) {
       console.error('Failed to delete card:', error);
-      toast.error('카드 삭제에 실패했습니다');
+      // apiUtils의 인터셉터가 에러 메시지를 처리하므로 추가 toast 불필요
     }
   };
 
@@ -359,7 +371,7 @@ const KanbanBoard = ({ socket, lastMessage }) => {
                                   type="text"
                                   value={editForm.ticker}
                                   onChange={(e) => setEditForm({ ...editForm, ticker: e.target.value })}
-                                  className="w-full px-2 py-1 border rounded text-sm"
+                                  className="w-full px-2 py-1 border rounded text-sm font-semibold"
                                   placeholder="티커"
                                   onClick={(e) => e.stopPropagation()}
                                 />
@@ -387,21 +399,21 @@ const KanbanBoard = ({ socket, lastMessage }) => {
                                   onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
                                   className="w-full px-2 py-1 border rounded text-sm resize-none"
                                   rows="2"
-                                  placeholder="메모"
+                                  placeholder="메모 (선택사항)"
                                   onClick={(e) => e.stopPropagation()}
                                 />
                                 <div className="flex justify-end gap-2">
                                   <button
                                     onClick={cancelEdit}
-                                    className="px-2 py-1 text-sm bg-gray-200 hover:bg-gray-300 rounded"
+                                    className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 rounded flex items-center"
                                   >
-                                    <X size={14} />
+                                    <X size={14} className="mr-1" /> 취소
                                   </button>
                                   <button
                                     onClick={() => saveEdit(card.id, column.id)}
-                                    className="px-2 py-1 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
+                                    className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded flex items-center"
                                   >
-                                    <Check size={14} />
+                                    <Check size={14} className="mr-1" /> 저장
                                   </button>
                                 </div>
                               </div>
