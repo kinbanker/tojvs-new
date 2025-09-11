@@ -14,6 +14,8 @@ export const useSocket = (userId) => {
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
+  const processedEventIds = useRef(new Set()); // 처리된 이벤트 ID 추적
+  const lastToastTime = useRef({}); // Toast 타입별 마지막 표시 시간
   
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -89,66 +91,71 @@ export const useSocket = (userId) => {
           console.log('Server confirmed connection:', data);
         });
 
-        // Command processing status
+        // Command processing status - 중복 방지 개선
         socketRef.current.on('processing', (status) => {
           console.log('Processing status:', status);
-          if (status.message) {
-            toast.loading(status.message, { duration: 2000 });
-          }
+          // processing 메시지는 Dashboard에서 처리하므로 여기서는 스킵
         });
 
-        // Command results
+        // Command results - 중복 방지 개선
         socketRef.current.on('command-result', (message) => {
           console.log('Received result:', message);
+          
+          // 메시지 ID 생성
+          const messageId = `${message.timestamp}_${message.type}`;
+          
+          // 이미 처리한 메시지면 스킵
+          if (processedEventIds.current.has(messageId)) {
+            console.log('Duplicate command-result detected, skipping');
+            return;
+          }
+          
+          processedEventIds.current.add(messageId);
           setLastMessage(message);
           
-          // Show success message based on type
-          if (message.type === 'kanban') {
-            toast.success('칸반 카드가 추가되었습니다');
-          } else if (message.type === 'news') {
-            toast.success('뉴스를 찾았습니다');
+          // Toast 중복 방지 - 1초 이내 같은 타입의 toast는 표시하지 않음
+          const now = Date.now();
+          const lastTime = lastToastTime.current[message.type] || 0;
+          
+          if (now - lastTime > 1000) {
+            // Toast는 Dashboard에서 처리하므로 여기서는 스킵
+            lastToastTime.current[message.type] = now;
           }
         });
 
-        // ⭐ n8n Voice command results - 새로 추가된 이벤트 리스너
+        // ⭐ n8n Voice command results - 중복 방지 개선
         socketRef.current.on('voiceCommandResult', (result) => {
           console.log('📢 Voice command result from n8n:', result);
-          setLastMessage(result);
           
-          // Show success message based on type
-          if (result.type === 'news') {
-            toast.success(`${result.data.articles?.length || 0}개의 뉴스를 찾았습니다`);
-            // Dispatch custom event for components to handle
-            window.dispatchEvent(new CustomEvent('voiceCommandNews', {
-              detail: result.data
-            }));
-          } else if (result.type === 'market') {
-            toast.success('시장 데이터를 가져왔습니다');
-            window.dispatchEvent(new CustomEvent('voiceCommandMarket', {
-              detail: result.data
-            }));
-          } else if (result.type === 'kanban') {
-            toast.success('칸반 보드가 업데이트되었습니다');
-            window.dispatchEvent(new CustomEvent('voiceCommandKanban', {
-              detail: result.data
-            }));
-          } else if (result.type === 'portfolio') {
-            toast.success('포트폴리오 정보를 가져왔습니다');
-            window.dispatchEvent(new CustomEvent('voiceCommandPortfolio', {
-              detail: result.data
-            }));
-          } else if (result.type === 'error') {
-            toast.error(result.data?.message || '명령을 처리할 수 없습니다');
+          // 메시지 ID 생성
+          const messageId = `${result.timestamp}_${result.type}`;
+          
+          // 이미 처리한 메시지면 스킵
+          if (processedEventIds.current.has(messageId)) {
+            console.log('Duplicate voiceCommandResult detected, skipping');
+            return;
           }
           
-          // Debug logging in development
-          if (process.env.NODE_ENV === 'development') {
-            console.log('Voice command result details:', {
-              type: result.type,
-              data: result.data,
-              timestamp: result.timestamp,
-              source: result.source
-            });
+          processedEventIds.current.add(messageId);
+          setLastMessage(result);
+          
+          // Toast 중복 방지
+          const now = Date.now();
+          const lastTime = lastToastTime.current[result.type] || 0;
+          
+          if (now - lastTime > 1000) {
+            // Custom event dispatch
+            window.dispatchEvent(new CustomEvent('voiceCommand' + result.type.charAt(0).toUpperCase() + result.type.slice(1), {
+              detail: result.data
+            }));
+            
+            lastToastTime.current[result.type] = now;
+          }
+          
+          // 오래된 이벤트 ID 정리 (메모리 누수 방지)
+          if (processedEventIds.current.size > 100) {
+            const idsArray = Array.from(processedEventIds.current);
+            processedEventIds.current = new Set(idsArray.slice(-50));
           }
         });
 
@@ -165,7 +172,7 @@ export const useSocket = (userId) => {
         // Error messages
         socketRef.current.on('error', (error) => {
           console.error('Server error:', error);
-          toast.error(error.message || '오류가 발생했습니다');
+          // Error toast는 Dashboard에서 처리
         });
 
         // Debug socket in development
@@ -193,6 +200,10 @@ export const useSocket = (userId) => {
         socketRef.current.disconnect();
         socketRef.current = null;
       }
+      
+      // Clear tracked events
+      processedEventIds.current.clear();
+      lastToastTime.current = {};
     };
   }, [userId]);
   
