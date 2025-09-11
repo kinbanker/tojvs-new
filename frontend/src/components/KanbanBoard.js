@@ -1,34 +1,56 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import apiUtils from '../utils/api';
 
-const KanbanBoard = ({ socket, lastMessage }) => {  // lastMessage prop 추가
+const KanbanBoard = ({ socket, lastMessage }) => {
   const [columns, setColumns] = useState({
     'buy-wait': { id: 'buy-wait', title: '매수대기', cards: [] },
     'buy-done': { id: 'buy-done', title: '매수완료', cards: [] },
     'sell-wait': { id: 'sell-wait', title: '매도대기', cards: [] },
     'sell-done': { id: 'sell-done', title: '매도완료', cards: [] }
   });
+  
+  // 중복 처리 방지를 위한 ref
+  const processedCardIds = useRef(new Set());
+  const lastProcessedMessageTime = useRef(null);
 
   useEffect(() => {
     loadCards();
   }, []);
 
-  // n8n command-result 처리 추가
+  // n8n command-result 처리 (중복 방지 개선)
   useEffect(() => {
     if (lastMessage && lastMessage.type === 'kanban' && lastMessage.data) {
       const { action, card } = lastMessage.data;
       
+      // 타임스탬프 체크 (1초 이내 같은 메시지는 무시)
+      const messageTime = lastMessage.timestamp;
+      if (lastProcessedMessageTime.current === messageTime) {
+        console.log('Duplicate message timestamp detected, skipping');
+        return;
+      }
+      lastProcessedMessageTime.current = messageTime;
+      
       if (action === 'ADD_CARD' && card) {
+        // 카드 ID 체크
+        const cardId = card.id || `card-${Date.now()}`;
+        
+        // 이미 처리한 카드인지 확인
+        if (processedCardIds.current.has(cardId)) {
+          console.log('Card already processed:', cardId);
+          return;
+        }
+        
         console.log('Adding card from n8n:', card);
+        processedCardIds.current.add(cardId);
         
         // column을 column_id로 매핑
         const normalizedCard = {
-          id: card.id || `card-${Date.now()}`,
+          id: cardId,
           ticker: card.ticker,
           price: card.price,
           quantity: card.quantity,
-          column_id: card.column || card.column_id,  // column 또는 column_id 처리
+          column_id: card.column || card.column_id,
           notes: card.notes,
           created_at: card.createdAt || new Date().toISOString(),
           user_id: card.userId,
@@ -36,21 +58,28 @@ const KanbanBoard = ({ socket, lastMessage }) => {  // lastMessage prop 추가
         };
         
         addCard(normalizedCard.column_id, normalizedCard);
+        
+        // 오래된 ID 정리 (메모리 관리)
+        if (processedCardIds.current.size > 100) {
+          const idsArray = Array.from(processedCardIds.current);
+          processedCardIds.current = new Set(idsArray.slice(-50));
+        }
       }
     }
   }, [lastMessage]);
 
+  // Socket의 kanban-update 이벤트는 다른 사용자의 업데이트나 카드 이동용으로만 사용
   useEffect(() => {
     if (!socket) return;
 
     const handleKanbanUpdate = (update) => {
       console.log('Kanban update received:', update);
       
-      if (update.type === 'ADD') {
-        addCard(update.columnId || update.column_id, update.card);
-      } else if (update.type === 'MOVE') {
+      // MOVE 이벤트만 처리 (ADD는 lastMessage로 처리)
+      if (update.type === 'MOVE') {
         moveCard(update.cardId, update.fromColumn, update.toColumn);
       }
+      // ADD 이벤트는 무시 (lastMessage로 이미 처리됨)
     };
 
     socket.on('kanban-update', handleKanbanUpdate);
@@ -76,6 +105,8 @@ const KanbanBoard = ({ socket, lastMessage }) => {  // lastMessage prop 추가
       
       cards.forEach(card => {
         if (cardsByColumn[card.column_id]) {
+          // 로드된 카드 ID를 처리된 목록에 추가
+          processedCardIds.current.add(card.id);
           cardsByColumn[card.column_id].push(card);
         }
       });
@@ -102,10 +133,10 @@ const KanbanBoard = ({ socket, lastMessage }) => {  // lastMessage prop 추가
         return prev;
       }
       
-      // 중복 확인
+      // 중복 확인 (state 레벨에서도 한 번 더 체크)
       const isDuplicate = prev[columnId].cards.some(c => c.id === card.id);
       if (isDuplicate) {
-        console.log('Card already exists:', card.id);
+        console.log('Card already exists in state:', card.id);
         return prev;
       }
       
