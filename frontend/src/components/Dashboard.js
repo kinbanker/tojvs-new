@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Home, CreditCard, User, LogOut, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -8,6 +8,7 @@ import VoiceRecorder from './VoiceRecorder';
 import ChatPanel from './ChatPanel';
 import KanbanBoard from './KanbanBoard';
 import NewsDisplay from './NewsDisplay';
+import MarketDisplay from './MarketDisplay';  // 추가
 import PlanManagement from './PlanManagement';
 import Profile from './Profile';
 import apiUtils from '../utils/api';
@@ -23,19 +24,35 @@ const Dashboard = ({ onLogout }) => {
   const [connectionAttempts, setConnectionAttempts] = useState(0);
   const [customSocketMessage, setCustomSocketMessage] = useState(null);
   
+  // 중복 처리 방지를 위한 ref
+  const lastProcessedMessageId = useRef(null);
+  const processingMessage = useRef(false);
+  
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
 
   // 통합 연결 상태 - customSocket 또는 useSocket 중 하나라도 연결되어 있으면 true
   const isAnySocketConnected = isCustomSocketConnected || isConnected;
 
+  // Toast 정리 함수
+  const clearAllToasts = () => {
+    toast.dismiss();
+  };
+
+  // 메뉴 변경 시 Toast 정리
+  useEffect(() => {
+    if (activeMenu !== 'home') {
+      clearAllToasts();
+    }
+  }, [activeMenu]);
+
   // 소켓 연결 함수들
   const createSocketWithPolling = () => {
     console.log('🔄 Trying Socket.IO with polling transport...');
     return io('https://dev.tojvs.com', {
       path: '/socket.io/',
-      transports: ['polling'], // WebSocket 제외, polling만 사용
-      upgrade: false, // WebSocket으로 업그레이드 방지
+      transports: ['polling'],
+      upgrade: false,
       auth: {
         token: localStorage.getItem('token')
       },
@@ -95,13 +112,15 @@ const Dashboard = ({ onLogout }) => {
       console.log(`✅ ${connectionType} socket connected:`, socketInstance.id);
       setIsCustomSocketConnected(true);
       setConnectionAttempts(0);
-      toast.success(`서버에 연결되었습니다 (${connectionType})`);
+      if (activeMenu === 'home') {  // 홈 화면에서만 toast 표시
+        toast.success(`서버에 연결되었습니다 (${connectionType})`);
+      }
     });
 
     socketInstance.on('disconnect', (reason) => {
       console.log(`❌ ${connectionType} socket disconnected:`, reason);
       setIsCustomSocketConnected(false);
-      if (reason !== 'io client disconnect') {
+      if (reason !== 'io client disconnect' && activeMenu === 'home') {
         toast.error('서버 연결이 끊어졌습니다.');
       }
     });
@@ -115,32 +134,56 @@ const Dashboard = ({ onLogout }) => {
     socketInstance.on('reconnect', (attemptNumber) => {
       console.log(`🔄 ${connectionType} reconnected after`, attemptNumber, 'attempts');
       setIsCustomSocketConnected(true);
-      toast.success('서버에 재연결되었습니다.');
+      if (activeMenu === 'home') {
+        toast.success('서버에 재연결되었습니다.');
+      }
     });
 
-    // 커스텀 소켓의 메시지 처리
+    // 커스텀 소켓의 메시지 처리 (중복 방지)
     socketInstance.on('command-result', (message) => {
       console.log('Received result via custom socket:', message);
-      setCustomSocketMessage(message);
       
-      // Show success message based on type
-      if (message.type === 'kanban') {
-        toast.success('칸반 카드가 추가되었습니다');
-      } else if (message.type === 'news') {
-        toast.success('뉴스를 찾았습니다');
+      // 메시지 ID 생성 (timestamp + type 조합)
+      const messageId = `${message.timestamp}_${message.type}`;
+      
+      // 이미 처리한 메시지인지 확인
+      if (lastProcessedMessageId.current === messageId) {
+        console.log('Duplicate message detected, skipping:', messageId);
+        return;
       }
+      
+      lastProcessedMessageId.current = messageId;
+      setCustomSocketMessage(message);
+    });
+
+    // voiceCommandResult 이벤트도 처리 (n8n에서 오는 이벤트)
+    socketInstance.on('voiceCommandResult', (result) => {
+      console.log('Received result:', result);
+      console.log('📢 Voice command result from n8n:', result);
+      
+      // command-result와 동일하게 처리
+      const messageId = `${result.timestamp}_${result.type}`;
+      if (lastProcessedMessageId.current === messageId) {
+        console.log('Duplicate voiceCommandResult detected, skipping:', messageId);
+        return;
+      }
+      
+      lastProcessedMessageId.current = messageId;
+      setCustomSocketMessage(result);
     });
 
     socketInstance.on('processing', (status) => {
       console.log('Processing status:', status);
-      if (status.message) {
+      if (status.message && activeMenu === 'home') {
         toast.loading(status.message, { duration: 2000 });
       }
     });
 
     socketInstance.on('error', (error) => {
       console.error('Server error:', error);
-      toast.error(error.message || '오류가 발생했습니다');
+      if (activeMenu === 'home') {
+        toast.error(error.message || '오류가 발생했습니다');
+      }
     });
 
     return socketInstance;
@@ -150,7 +193,9 @@ const Dashboard = ({ onLogout }) => {
   const attemptConnection = async () => {
     if (connectionAttempts >= 4) {
       console.log('❌ All connection attempts failed');
-      toast.error('서버 연결에 실패했습니다. 모든 방법을 시도했습니다.');
+      if (activeMenu === 'home') {
+        toast.error('서버 연결에 실패했습니다. 모든 방법을 시도했습니다.');
+      }
       return;
     }
 
@@ -180,7 +225,6 @@ const Dashboard = ({ onLogout }) => {
       }
 
       if (socketInstance) {
-        // 기존 소켓이 있다면 정리
         if (customSocket) {
           customSocket.disconnect();
         }
@@ -188,7 +232,6 @@ const Dashboard = ({ onLogout }) => {
         setupSocketListeners(socketInstance, connectionType);
         setCustomSocket(socketInstance);
 
-        // 연결 시도 후 잠시 대기
         setTimeout(() => {
           if (!socketInstance.connected) {
             console.log(`❌ ${connectionType} connection timeout, trying next method...`);
@@ -215,6 +258,7 @@ const Dashboard = ({ onLogout }) => {
         customSocket.disconnect();
         console.log('🔌 Custom socket disconnected on unmount');
       }
+      clearAllToasts();  // 컴포넌트 언마운트 시 Toast 정리
     };
   }, [user.id, connectionAttempts]);
 
@@ -228,46 +272,36 @@ const Dashboard = ({ onLogout }) => {
     toast.info('연결을 다시 시도합니다...');
   };
 
-  // 커스텀 소켓 메시지 처리
+  // 커스텀 소켓 메시지 처리 (중복 방지 개선)
   useEffect(() => {
-    if (customSocketMessage) {
+    if (customSocketMessage && !processingMessage.current) {
+      processingMessage.current = true;
       const { type, data } = customSocketMessage;
       
-      switch(type) {
-        case 'news':
-          setCurrentView('news');
-          setViewData(data);
-          addMessage(`뉴스를 찾았습니다: ${data.keyword}`, 'system');
-          break;
-          
-        case 'kanban':
-          setCurrentView('kanban');
-          if (data.action === 'ADD_CARD') {
-            addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system');
-          }
-          break;
-          
-        case 'chart':
-          setCurrentView('chart');
-          setViewData(data);
-          break;
-          
-        default:
-          break;
+      // Toast 메시지 한 번만 표시
+      if (activeMenu === 'home') {
+        switch(type) {
+          case 'news':
+            const articleCount = data?.articles?.length || 0;
+            if (articleCount > 0) {
+              toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
+            }
+            break;
+          case 'kanban':
+            toast.success('칸반 카드가 추가되었습니다');
+            break;
+          case 'market':
+            toast.success('시장 데이터를 불러왔습니다');
+            break;
+        }
       }
-    }
-  }, [customSocketMessage]);
-
-  // 기존 useSocket 훅의 lastMessage 처리
-  useEffect(() => {
-    if (lastMessage) {
-      const { type, data } = lastMessage;
       
+      // 뷰 업데이트
       switch(type) {
         case 'news':
           setCurrentView('news');
           setViewData(data);
-          addMessage(`뉴스를 찾았습니다: ${data.keyword}`, 'system');
+          addMessage(`뉴스를 찾았습니다: ${data.keyword || data.ticker}`, 'system');
           break;
           
         case 'kanban':
@@ -275,6 +309,12 @@ const Dashboard = ({ onLogout }) => {
           if (data.action === 'ADD_CARD') {
             addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system');
           }
+          break;
+          
+        case 'market':
+          setCurrentView('market');
+          setViewData(data);
+          addMessage(`${data.name || data.ticker}: $${data.price?.toLocaleString()}`, 'system');
           break;
           
         case 'chart':
@@ -285,8 +325,16 @@ const Dashboard = ({ onLogout }) => {
         default:
           break;
       }
+      
+      // 메시지 처리 완료
+      setTimeout(() => {
+        processingMessage.current = false;
+      }, 100);
     }
-  }, [lastMessage]);
+  }, [customSocketMessage, activeMenu]);
+
+  // 기존 useSocket 훅의 lastMessage 처리 제거 (중복 방지)
+  // 이미 customSocket에서 처리하므로 제거
 
   // 커스텀 소켓을 통한 메시지 송신 함수
   const sendCustomMessage = (message, type = 'voice-command') => {
@@ -299,17 +347,28 @@ const Dashboard = ({ onLogout }) => {
       console.log('📤 Message sent via custom socket:', message);
     } else {
       console.warn('❌ Custom socket not connected, cannot send message');
-      toast.error('서버에 연결되지 않았습니다.');
+      if (activeMenu === 'home') {
+        toast.error('서버에 연결되지 않았습니다.');
+      }
     }
   };
 
   const addMessage = (text, sender = 'user') => {
-    setMessages(prev => [...prev, {
-      id: Date.now(),
-      text,
-      sender,
-      timestamp: new Date()
-    }]);
+    setMessages(prev => {
+      // 중복 메시지 방지
+      const lastMessage = prev[prev.length - 1];
+      if (lastMessage && lastMessage.text === text && 
+          new Date() - lastMessage.timestamp < 1000) {
+        return prev;
+      }
+      
+      return [...prev, {
+        id: Date.now(),
+        text,
+        sender,
+        timestamp: new Date()
+      }];
+    });
   };
 
   const handleVoiceInput = (text) => {
@@ -321,12 +380,16 @@ const Dashboard = ({ onLogout }) => {
     } else if (socket && isConnected) {
       sendVoiceCommand(text);
     } else {
-      toast.error('서버에 연결되지 않았습니다.');
+      if (activeMenu === 'home') {
+        toast.error('서버에 연결되지 않았습니다.');
+      }
     }
   };
 
   // 로그아웃 개선
   const handleLogout = async () => {
+    clearAllToasts();  // 로그아웃 시 모든 Toast 정리
+    
     try {
       await apiUtils.logout();
     } catch (error) {
@@ -339,8 +402,10 @@ const Dashboard = ({ onLogout }) => {
       }
       
       localStorage.clear();
-      toast.success('로그아웃 되었습니다.');
-      onLogout();
+      toast.success('로그아웃 되었습니다.', { duration: 1500 });
+      setTimeout(() => {
+        onLogout();
+      }, 100);
     }
   };
 
@@ -432,7 +497,18 @@ const Dashboard = ({ onLogout }) => {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
           >
-            <NewsDisplay data={viewData} />
+            <NewsDisplay data={viewData} isConnected={isAnySocketConnected} />
+          </motion.div>
+        )}
+        
+        {currentView === 'market' && (
+          <motion.div
+            key="market"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+          >
+            <MarketDisplay data={viewData} isConnected={isAnySocketConnected} />
           </motion.div>
         )}
         
@@ -491,7 +567,7 @@ const Dashboard = ({ onLogout }) => {
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-1">
               <button
-                onClick={() => setActiveMenu('home')}
+                onClick={() => { setActiveMenu('home'); clearAllToasts(); }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'home' 
                     ? 'bg-blue-50 text-blue-600' 
@@ -502,7 +578,7 @@ const Dashboard = ({ onLogout }) => {
                 홈
               </button>
               <button
-                onClick={() => setActiveMenu('plan')}
+                onClick={() => { setActiveMenu('plan'); clearAllToasts(); }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'plan' 
                     ? 'bg-blue-50 text-blue-600' 
@@ -513,7 +589,7 @@ const Dashboard = ({ onLogout }) => {
                 플랜관리
               </button>
               <button
-                onClick={() => setActiveMenu('profile')}
+                onClick={() => { setActiveMenu('profile'); clearAllToasts(); }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'profile' 
                     ? 'bg-blue-50 text-blue-600' 
