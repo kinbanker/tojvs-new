@@ -27,6 +27,7 @@ const Dashboard = ({ onLogout }) => {
   // 중복 처리 방지를 위한 ref
   const lastProcessedMessageId = useRef(null);
   const processingMessage = useRef(false);
+  const toastIdRef = useRef(null);  // Toast ID 추적
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
@@ -172,10 +173,15 @@ const Dashboard = ({ onLogout }) => {
       setCustomSocketMessage(result);
     });
 
+    // processing 이벤트 처리 개선 (중복 방지)
     socketInstance.on('processing', (status) => {
       console.log('Processing status:', status);
       if (status.message && activeMenu === 'home') {
-        toast.loading(status.message, { duration: 2000 });
+        // 이전 processing toast가 있으면 제거
+        if (toastIdRef.current) {
+          toast.dismiss(toastIdRef.current);
+        }
+        toastIdRef.current = toast.loading(status.message, { duration: 2000 });
       }
     });
 
@@ -278,20 +284,26 @@ const Dashboard = ({ onLogout }) => {
       processingMessage.current = true;
       const { type, data } = customSocketMessage;
       
-      // Toast 메시지 한 번만 표시
+      // Toast 메시지 한 번만 표시 (이전 toast 제거)
       if (activeMenu === 'home') {
+        // 이전 toast 제거
+        if (toastIdRef.current) {
+          toast.dismiss(toastIdRef.current);
+          toastIdRef.current = null;
+        }
+        
         switch(type) {
           case 'news':
             const articleCount = data?.articles?.length || 0;
             if (articleCount > 0) {
-              toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
+              toastIdRef.current = toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
             }
             break;
           case 'kanban':
-            toast.success('칸반 카드가 추가되었습니다');
+            toastIdRef.current = toast.success('칸반 카드가 추가되었습니다');
             break;
           case 'market':
-            toast.success('시장 데이터를 불러왔습니다');
+            toastIdRef.current = toast.success('시장 데이터를 불러왔습니다');
             break;
         }
       }
@@ -519,7 +531,10 @@ const Dashboard = ({ onLogout }) => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
-            <KanbanBoard socket={customSocket || socket} />
+            <KanbanBoard 
+              socket={customSocket || socket} 
+              lastMessage={customSocketMessage || lastMessage}  // lastMessage prop 추가
+            />
           </motion.div>
         )}
       </AnimatePresence>
