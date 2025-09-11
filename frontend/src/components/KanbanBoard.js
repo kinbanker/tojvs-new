@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+import { Edit2, Trash2, X, Check } from 'lucide-react';
 import apiUtils from '../utils/api';
+import toast from 'react-hot-toast';
 
 const KanbanBoard = ({ socket, lastMessage }) => {
   const [columns, setColumns] = useState({
@@ -8,6 +10,14 @@ const KanbanBoard = ({ socket, lastMessage }) => {
     'buy-done': { id: 'buy-done', title: '매수완료', cards: [] },
     'sell-wait': { id: 'sell-wait', title: '매도대기', cards: [] },
     'sell-done': { id: 'sell-done', title: '매도완료', cards: [] }
+  });
+  
+  const [editingCard, setEditingCard] = useState(null);
+  const [editForm, setEditForm] = useState({
+    ticker: '',
+    price: '',
+    quantity: '',
+    notes: ''
   });
   
   // 중복 처리 방지를 위한 ref
@@ -187,6 +197,104 @@ const KanbanBoard = ({ socket, lastMessage }) => {
     }
   };
 
+  // 편집 모드 시작
+  const startEdit = (card, e) => {
+    e.stopPropagation(); // 드래그 방지
+    setEditingCard(card.id);
+    setEditForm({
+      ticker: card.ticker,
+      price: card.price,
+      quantity: card.quantity,
+      notes: card.notes || ''
+    });
+  };
+
+  // 편집 취소
+  const cancelEdit = () => {
+    setEditingCard(null);
+    setEditForm({
+      ticker: '',
+      price: '',
+      quantity: '',
+      notes: ''
+    });
+  };
+
+  // 편집 저장
+  const saveEdit = async (cardId, columnId) => {
+    try {
+      // API 호출하여 서버에 업데이트
+      const token = localStorage.getItem('token');
+      await apiUtils.request(`/api/kanban/${cardId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          ...editForm,
+          column_id: columnId
+        })
+      });
+
+      // 로컬 상태 업데이트
+      setColumns(prev => {
+        const newColumns = { ...prev };
+        const column = newColumns[columnId];
+        const cardIndex = column.cards.findIndex(c => c.id === cardId);
+        
+        if (cardIndex !== -1) {
+          column.cards[cardIndex] = {
+            ...column.cards[cardIndex],
+            ...editForm
+          };
+        }
+        
+        return newColumns;
+      });
+
+      toast.success('카드가 수정되었습니다');
+      cancelEdit();
+    } catch (error) {
+      console.error('Failed to update card:', error);
+      toast.error('카드 수정에 실패했습니다');
+    }
+  };
+
+  // 카드 삭제
+  const deleteCard = async (cardId, columnId, e) => {
+    e.stopPropagation(); // 드래그 방지
+    
+    if (!window.confirm('이 카드를 삭제하시겠습니까?')) {
+      return;
+    }
+
+    try {
+      // API 호출하여 서버에서 삭제
+      const token = localStorage.getItem('token');
+      await apiUtils.request(`/api/kanban/${cardId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      // 로컬 상태에서 제거
+      setColumns(prev => ({
+        ...prev,
+        [columnId]: {
+          ...prev[columnId],
+          cards: prev[columnId].cards.filter(c => c.id !== cardId)
+        }
+      }));
+
+      toast.success('카드가 삭제되었습니다');
+    } catch (error) {
+      console.error('Failed to delete card:', error);
+      toast.error('카드 삭제에 실패했습니다');
+    }
+  };
+
   return (
     <div className="h-full">
       <h2 className="text-2xl font-bold mb-6">매매 현황</h2>
@@ -213,28 +321,107 @@ const KanbanBoard = ({ socket, lastMessage }) => {
                         key={card.id}
                         draggableId={String(card.id)}
                         index={index}
+                        isDragDisabled={editingCard === card.id}
                       >
                         {(provided, snapshot) => (
                           <div
                             ref={provided.innerRef}
                             {...provided.draggableProps}
                             {...provided.dragHandleProps}
-                            className={`bg-white p-3 rounded shadow-sm transition ${
+                            className={`bg-white p-3 rounded shadow-sm transition relative group ${
                               snapshot.isDragging ? 'shadow-lg rotate-3' : ''
-                            }`}
+                            } ${editingCard === card.id ? 'ring-2 ring-blue-500' : ''}`}
                           >
-                            <div className="font-semibold text-blue-600">{card.ticker}</div>
-                            <div className="text-sm text-gray-600">
-                              ${card.price} × {card.quantity}주
-                            </div>
-                            {card.notes && (
-                              <div className="text-xs text-gray-500 mt-1 italic">
-                                {card.notes}
+                            {/* 편집/삭제 버튼 */}
+                            {editingCard !== card.id && (
+                              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                                <button
+                                  onClick={(e) => startEdit(card, e)}
+                                  className="p-1 hover:bg-gray-100 rounded text-gray-600 hover:text-blue-600"
+                                  title="편집"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button
+                                  onClick={(e) => deleteCard(card.id, column.id, e)}
+                                  className="p-1 hover:bg-gray-100 rounded text-gray-600 hover:text-red-600"
+                                  title="삭제"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
                               </div>
                             )}
-                            <div className="text-xs text-gray-400 mt-1">
-                              {new Date(card.created_at || card.createdAt).toLocaleTimeString()}
-                            </div>
+
+                            {/* 편집 모드 */}
+                            {editingCard === card.id ? (
+                              <div className="space-y-2">
+                                <input
+                                  type="text"
+                                  value={editForm.ticker}
+                                  onChange={(e) => setEditForm({ ...editForm, ticker: e.target.value })}
+                                  className="w-full px-2 py-1 border rounded text-sm"
+                                  placeholder="티커"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                                <div className="flex gap-2">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={editForm.price}
+                                    onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
+                                    className="flex-1 px-2 py-1 border rounded text-sm"
+                                    placeholder="가격"
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                  <input
+                                    type="number"
+                                    value={editForm.quantity}
+                                    onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })}
+                                    className="flex-1 px-2 py-1 border rounded text-sm"
+                                    placeholder="수량"
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                </div>
+                                <textarea
+                                  value={editForm.notes}
+                                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                                  className="w-full px-2 py-1 border rounded text-sm resize-none"
+                                  rows="2"
+                                  placeholder="메모"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    onClick={cancelEdit}
+                                    className="px-2 py-1 text-sm bg-gray-200 hover:bg-gray-300 rounded"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => saveEdit(card.id, column.id)}
+                                    className="px-2 py-1 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
+                                  >
+                                    <Check size={14} />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              // 일반 표시 모드
+                              <>
+                                <div className="font-semibold text-blue-600">{card.ticker}</div>
+                                <div className="text-sm text-gray-600">
+                                  ${card.price} × {card.quantity}주
+                                </div>
+                                {card.notes && (
+                                  <div className="text-xs text-gray-500 mt-1 italic">
+                                    {card.notes}
+                                  </div>
+                                )}
+                                <div className="text-xs text-gray-400 mt-1">
+                                  {new Date(card.created_at || card.createdAt).toLocaleTimeString()}
+                                </div>
+                              </>
+                            )}
                           </div>
                         )}
                       </Draggable>
