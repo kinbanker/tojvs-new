@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
-import { Edit2, Trash2, X, Check } from 'lucide-react';
+import { Edit2, Trash2, X, Check, ArrowRight } from 'lucide-react';
 import apiUtils from '../utils/api';
 import toast from 'react-hot-toast';
 
@@ -24,16 +24,139 @@ const KanbanBoard = ({ socket, lastMessage }) => {
   const processedCardIds = useRef(new Set());
   const lastProcessedMessageTime = useRef(null);
 
+  // 칼럼 진행 순서 정의
+  const columnProgression = {
+    'buy-wait': 'buy-done',
+    'buy-done': 'sell-wait',
+    'sell-wait': 'sell-done',
+    'sell-done': null // 마지막 단계
+  };
+
+  // 칼럼별 이전 단계 정의 (역방향)
+  const columnPrevious = {
+    'buy-done': 'buy-wait',
+    'sell-wait': 'buy-done',
+    'sell-done': 'sell-wait',
+    'buy-wait': null // 첫 단계
+  };
+
   useEffect(() => {
     loadCards();
   }, []);
 
-  // n8n command-result 처리 (중복 방지 개선)
+  // 카드 찾기 함수
+  const findSimilarCard = (ticker, targetColumn) => {
+    const searchColumns = [];
+    
+    // 목표 칼럼의 이전 단계 칼럼을 우선 검색
+    const previousColumn = columnPrevious[targetColumn];
+    if (previousColumn) {
+      searchColumns.push(previousColumn);
+    }
+    
+    // 그 외 모든 칼럼도 검색 (현재 칼럼 제외)
+    Object.keys(columns).forEach(col => {
+      if (col !== targetColumn && !searchColumns.includes(col)) {
+        searchColumns.push(col);
+      }
+    });
+
+    let foundCards = [];
+    
+    // 각 칼럼에서 티커가 일치하는 카드 찾기
+    searchColumns.forEach(colId => {
+      const matchingCards = columns[colId].cards.filter(card => 
+        card.ticker.toUpperCase() === ticker.toUpperCase()
+      );
+      
+      matchingCards.forEach(card => {
+        foundCards.push({
+          card,
+          columnId: colId,
+          // 이전 단계 카드에 높은 우선순위 부여
+          priority: colId === previousColumn ? 2 : 1
+        });
+      });
+    });
+
+    // 우선순위와 생성 시간으로 정렬 (우선순위 높은 것, 최신 것 순)
+    foundCards.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return b.priority - a.priority;
+      }
+      // 같은 우선순위면 최신 카드 우선
+      return new Date(b.card.created_at || b.card.createdAt) - 
+             new Date(a.card.created_at || a.card.createdAt);
+    });
+
+    return foundCards.length > 0 ? foundCards[0] : null;
+  };
+
+  // 카드 이동 함수 개선
+  const moveCardToColumn = async (cardId, fromColumn, toColumn) => {
+    try {
+      // 로컬 상태 업데이트
+      setColumns(prev => {
+        const card = prev[fromColumn]?.cards.find(c => c.id === cardId);
+        if (!card) return prev;
+
+        return {
+          ...prev,
+          [fromColumn]: {
+            ...prev[fromColumn],
+            cards: prev[fromColumn].cards.filter(c => c.id !== cardId)
+          },
+          [toColumn]: {
+            ...prev[toColumn],
+            cards: [...prev[toColumn].cards, { ...card, column_id: toColumn }]
+          }
+        };
+      });
+
+      // 서버에 업데이트
+      await apiUtils.updateKanbanCard(cardId, {
+        column_id: toColumn
+      });
+
+      // Socket으로 다른 클라이언트에 알림
+      if (socket) {
+        socket.emit('move-card', {
+          cardId,
+          fromColumn,
+          toColumn
+        });
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Failed to move card:', error);
+      // 실패 시 원래 위치로 롤백
+      setColumns(prev => {
+        const card = prev[toColumn]?.cards.find(c => c.id === cardId);
+        if (!card) return prev;
+
+        return {
+          ...prev,
+          [toColumn]: {
+            ...prev[toColumn],
+            cards: prev[toColumn].cards.filter(c => c.id !== cardId)
+          },
+          [fromColumn]: {
+            ...prev[fromColumn],
+            cards: [...prev[fromColumn].cards, card]
+          }
+        };
+      });
+      return false;
+    }
+  };
+
+  // n8n command-result 처리 개선
   useEffect(() => {
     if (lastMessage && lastMessage.type === 'kanban' && lastMessage.data) {
       const { action, card } = lastMessage.data;
       
-      // 타임스탬프 체크 (1초 이내 같은 메시지는 무시)
+      // 타임스탬프 체크
       const messageTime = lastMessage.timestamp;
       if (lastProcessedMessageTime.current === messageTime) {
         console.log('Duplicate message timestamp detected, skipping');
@@ -42,54 +165,112 @@ const KanbanBoard = ({ socket, lastMessage }) => {
       lastProcessedMessageTime.current = messageTime;
       
       if (action === 'ADD_CARD' && card) {
-        // 카드 ID 체크
         const cardId = card.id || `card-${Date.now()}`;
+        const targetColumn = card.column || card.column_id;
+        const ticker = card.ticker;
         
-        // 이미 처리한 카드인지 확인
-        if (processedCardIds.current.has(cardId)) {
-          console.log('Card already processed:', cardId);
-          return;
-        }
+        console.log('Processing kanban command:', { ticker, targetColumn, action });
         
-        console.log('Adding card from n8n:', card);
-        processedCardIds.current.add(cardId);
+        // 1. 먼저 유사한 카드를 찾기
+        const similarCard = findSimilarCard(ticker, targetColumn);
         
-        // column을 column_id로 매핑
-        const normalizedCard = {
-          id: cardId,
-          ticker: card.ticker,
-          price: card.price,
-          quantity: card.quantity,
-          column_id: card.column || card.column_id,
-          notes: card.notes,
-          created_at: card.createdAt || new Date().toISOString(),
-          user_id: card.userId,
-          username: card.username
-        };
-        
-        addCard(normalizedCard.column_id, normalizedCard);
-        
-        // 오래된 ID 정리 (메모리 관리)
-        if (processedCardIds.current.size > 100) {
-          const idsArray = Array.from(processedCardIds.current);
-          processedCardIds.current = new Set(idsArray.slice(-50));
+        if (similarCard) {
+          // 2. 유사한 카드가 있으면 이동
+          console.log(`Moving existing card: ${ticker} from ${similarCard.columnId} to ${targetColumn}`);
+          
+          moveCardToColumn(
+            similarCard.card.id, 
+            similarCard.columnId, 
+            targetColumn
+          ).then(success => {
+            if (success) {
+              toast.success(
+                <div>
+                  <strong>{ticker}</strong> 카드를 이동했습니다
+                  <div className="text-xs mt-1 flex items-center">
+                    {columns[similarCard.columnId].title} 
+                    <ArrowRight className="w-3 h-3 mx-1" />
+                    {columns[targetColumn].title}
+                  </div>
+                </div>,
+                { duration: 3000 }
+              );
+            }
+          });
+          
+        } else {
+          // 3. 유사한 카드가 없으면 새로 생성
+          if (processedCardIds.current.has(cardId)) {
+            console.log('Card already processed:', cardId);
+            return;
+          }
+          
+          console.log('Creating new card:', card);
+          processedCardIds.current.add(cardId);
+          
+          const normalizedCard = {
+            id: cardId,
+            ticker: card.ticker,
+            price: card.price,
+            quantity: card.quantity,
+            column_id: targetColumn,
+            notes: card.notes,
+            created_at: card.createdAt || new Date().toISOString(),
+            user_id: card.userId,
+            username: card.username
+          };
+          
+          addCard(targetColumn, normalizedCard);
+          toast.success(
+            <div>
+              <strong>{ticker}</strong> 카드를 생성했습니다
+              <div className="text-xs mt-1">
+                {columns[targetColumn].title}에 추가됨
+              </div>
+            </div>,
+            { duration: 3000 }
+          );
+          
+          // 오래된 ID 정리
+          if (processedCardIds.current.size > 100) {
+            const idsArray = Array.from(processedCardIds.current);
+            processedCardIds.current = new Set(idsArray.slice(-50));
+          }
         }
       }
     }
-  }, [lastMessage]);
+  }, [lastMessage, columns]); // columns를 dependency에 추가
 
-  // Socket의 kanban-update 이벤트는 다른 사용자의 업데이트나 카드 이동용으로만 사용
+  // Socket의 kanban-update 이벤트 처리
   useEffect(() => {
     if (!socket) return;
 
     const handleKanbanUpdate = (update) => {
       console.log('Kanban update received:', update);
       
-      // MOVE 이벤트만 처리 (ADD는 lastMessage로 처리)
+      // MOVE 이벤트만 처리
       if (update.type === 'MOVE') {
-        moveCard(update.cardId, update.fromColumn, update.toColumn);
+        setColumns(prev => {
+          const card = prev[update.fromColumn]?.cards.find(
+            c => c.id === parseInt(update.cardId)
+          );
+          if (!card) return prev;
+
+          return {
+            ...prev,
+            [update.fromColumn]: {
+              ...prev[update.fromColumn],
+              cards: prev[update.fromColumn].cards.filter(
+                c => c.id !== parseInt(update.cardId)
+              )
+            },
+            [update.toColumn]: {
+              ...prev[update.toColumn],
+              cards: [...prev[update.toColumn].cards, card]
+            }
+          };
+        });
       }
-      // ADD 이벤트는 무시 (lastMessage로 이미 처리됨)
     };
 
     socket.on('kanban-update', handleKanbanUpdate);
@@ -110,12 +291,10 @@ const KanbanBoard = ({ socket, lastMessage }) => {
         'sell-done': []
       };
       
-      // response.data가 배열인지 확인
       const cards = Array.isArray(response.data) ? response.data : response.data.cards || [];
       
       cards.forEach(card => {
         if (cardsByColumn[card.column_id]) {
-          // 로드된 카드 ID를 처리된 목록에 추가
           processedCardIds.current.add(card.id);
           cardsByColumn[card.column_id].push(card);
         }
@@ -137,13 +316,11 @@ const KanbanBoard = ({ socket, lastMessage }) => {
     console.log('Adding card to column:', columnId, card);
     
     setColumns(prev => {
-      // columnId 유효성 검사
       if (!prev[columnId]) {
         console.error('Invalid column ID:', columnId);
         return prev;
       }
       
-      // 중복 확인 (state 레벨에서도 한 번 더 체크)
       const isDuplicate = prev[columnId].cards.some(c => c.id === card.id);
       if (isDuplicate) {
         console.log('Card already exists in state:', card.id);
@@ -160,25 +337,6 @@ const KanbanBoard = ({ socket, lastMessage }) => {
     });
   };
 
-  const moveCard = (cardId, fromColumn, toColumn) => {
-    setColumns(prev => {
-      const card = prev[fromColumn]?.cards.find(c => c.id === parseInt(cardId));
-      if (!card) return prev;
-
-      return {
-        ...prev,
-        [fromColumn]: {
-          ...prev[fromColumn],
-          cards: prev[fromColumn].cards.filter(c => c.id !== parseInt(cardId))
-        },
-        [toColumn]: {
-          ...prev[toColumn],
-          cards: [...prev[toColumn].cards, card]
-        }
-      };
-    });
-  };
-
   const onDragEnd = async (result) => {
     const { source, destination, draggableId } = result;
     
@@ -186,34 +344,20 @@ const KanbanBoard = ({ socket, lastMessage }) => {
     if (source.droppableId === destination.droppableId && 
         source.index === destination.index) return;
     
-    // 로컬 상태 업데이트
-    moveCard(draggableId, source.droppableId, destination.droppableId);
+    const success = await moveCardToColumn(
+      draggableId, 
+      source.droppableId, 
+      destination.droppableId
+    );
     
-    // 서버에 업데이트
-    try {
-      await apiUtils.updateKanbanCard(draggableId, {
-        column_id: destination.droppableId
-      });
-      
-      // Socket으로 다른 클라이언트에 알림
-      if (socket) {
-        socket.emit('move-card', {
-          cardId: draggableId,
-          fromColumn: source.droppableId,
-          toColumn: destination.droppableId
-        });
-      }
-    } catch (error) {
-      console.error('Failed to update card position:', error);
-      // 실패 시 원래 위치로 롤백
-      moveCard(draggableId, destination.droppableId, source.droppableId);
+    if (!success) {
       toast.error('카드 이동에 실패했습니다');
     }
   };
 
   // 편집 모드 시작
   const startEdit = (card, e) => {
-    e.stopPropagation(); // 드래그 방지
+    e.stopPropagation();
     setEditingCard(card.id);
     setEditForm({
       ticker: card.ticker,
@@ -237,13 +381,11 @@ const KanbanBoard = ({ socket, lastMessage }) => {
   // 편집 저장
   const saveEdit = async (cardId, columnId) => {
     try {
-      // 입력값 검증
       if (!editForm.ticker || !editForm.price || !editForm.quantity) {
         toast.error('필수 항목을 모두 입력해주세요');
         return;
       }
 
-      // API 호출하여 서버에 업데이트
       await apiUtils.updateKanbanCard(cardId, {
         ticker: editForm.ticker.toUpperCase(),
         price: parseFloat(editForm.price),
@@ -252,7 +394,6 @@ const KanbanBoard = ({ socket, lastMessage }) => {
         column_id: columnId
       });
 
-      // 로컬 상태 업데이트
       setColumns(prev => {
         const newColumns = { ...prev };
         const column = newColumns[columnId];
@@ -275,23 +416,20 @@ const KanbanBoard = ({ socket, lastMessage }) => {
       cancelEdit();
     } catch (error) {
       console.error('Failed to update card:', error);
-      // apiUtils의 인터셉터가 에러 메시지를 처리하므로 추가 toast 불필요
     }
   };
 
   // 카드 삭제
   const deleteCard = async (cardId, columnId, e) => {
-    e.stopPropagation(); // 드래그 방지
+    e.stopPropagation();
     
     if (!window.confirm('이 카드를 삭제하시겠습니까?')) {
       return;
     }
 
     try {
-      // API 호출하여 서버에서 삭제
       await apiUtils.deleteKanbanCard(cardId);
 
-      // 로컬 상태에서 제거
       setColumns(prev => ({
         ...prev,
         [columnId]: {
@@ -303,7 +441,6 @@ const KanbanBoard = ({ socket, lastMessage }) => {
       toast.success('카드가 삭제되었습니다');
     } catch (error) {
       console.error('Failed to delete card:', error);
-      // apiUtils의 인터셉터가 에러 메시지를 처리하므로 추가 toast 불필요
     }
   };
 
