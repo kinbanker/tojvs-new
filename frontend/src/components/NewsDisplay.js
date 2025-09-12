@@ -19,14 +19,23 @@ const getArticles = (data) => {
   return data?.articles || data?.news || data?.items || [];
 };
 
-// Helper function to get social media posts
+// Helper function to get social media posts - socialMedia 필드 추가
 const getSocialPosts = (data) => {
-  return data?.tweets || data?.socialPosts || data?.social || [];
+  return data?.socialMedia || data?.tweets || data?.socialPosts || data?.social || [];
 };
 
 const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = null }) => {
   const [activeTab, setActiveTab] = useState('all');
   const newsData = useMemo(() => data, [data]);
+
+  // Debug logging for received data
+  React.useEffect(() => {
+    if (newsData) {
+      console.log('NewsDisplay received data:', newsData);
+      console.log('Articles:', getArticles(newsData));
+      console.log('Social Posts:', getSocialPosts(newsData));
+    }
+  }, [newsData]);
 
   // Show loading state
   if (isLoading) {
@@ -268,7 +277,7 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
                               {post.author || 'Unknown'}
                             </p>
                             <p className="text-sm text-gray-500">
-                              @{post.username || 'user'}
+                              {post.username || '@user'}
                             </p>
                           </div>
                           <Twitter className="w-5 h-5 text-blue-400" />

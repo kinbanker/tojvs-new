@@ -313,20 +313,34 @@ const Dashboard = ({ onLogout }) => {
     switch(type) {
       case 'news':
         const articleCount = data?.articles?.length || 0;
-        if (articleCount > 0) {
-          toastIdRef.current = toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
+        const socialCount = data?.socialMedia?.length || 0;  // socialMedia 필드 확인
+        const totalCount = articleCount + socialCount;
+        
+        console.log('Processing news data:', { 
+          articles: articleCount, 
+          social: socialCount,
+          data: data 
+        });
+        
+        if (totalCount > 0) {
+          const message = socialCount > 0 
+            ? `${articleCount}개의 뉴스와 ${socialCount}개의 소셜 미디어를 찾았습니다`
+            : `${articleCount}개의 뉴스를 찾았습니다`;
+            
+          toastIdRef.current = toast.success(message);
           setCurrentView('news');
-          setViewData(data);
+          setViewData(data);  // 전체 데이터를 그대로 전달
           setViewTimestamp(timestamp);
           setIsHistoricalView(false);
           
-          // 뉴스 스냅샷 저장
+          // 뉴스 스냅샷 저장 (socialMedia 포함)
           snapshot = {
             type: 'news',
             data: {
               keyword: data.keyword,
               ticker: data.ticker,
-              articles: data.articles?.slice(0, 3) // 처음 3개만 저장
+              articles: data.articles?.slice(0, 3), // 처음 3개만 저장
+              socialMedia: data.socialMedia?.slice(0, 2) // 처음 2개만 저장
             },
             timestamp
           };
