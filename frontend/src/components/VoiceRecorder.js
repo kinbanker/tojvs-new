@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, AlertCircle } from 'lucide-react';
+import { Mic, MicOff, AlertCircle, Keyboard, Send } from 'lucide-react';
 
 // Simple toast implementation if react-hot-toast is not available
 const toast = {
@@ -24,10 +24,13 @@ const VoiceRecorder = ({
   const [isSupported, setIsSupported] = useState(true);
   const [error, setError] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [inputMode, setInputMode] = useState('voice'); // 'voice' or 'keyboard'
+  const [keyboardInput, setKeyboardInput] = useState('');
   
   const recognitionRef = useRef(null);
   const silenceTimerRef = useRef(null);
   const mediaStreamRef = useRef(null);
+  const inputRef = useRef(null);
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -286,16 +289,82 @@ const VoiceRecorder = ({
     }
   };
 
-  // Show unsupported message
-  if (!isSupported) {
+  // Handle keyboard input submission
+  const handleKeyboardSubmit = (e) => {
+    e?.preventDefault();
+    
+    if (!keyboardInput.trim()) {
+      return;
+    }
+
+    if (!isConnected) {
+      setError('서버 연결이 끊겼습니다. 잠시 후 다시 시도해주세요.');
+      toast.error('서버 연결이 끊겼습니다.');
+      return;
+    }
+
+    if (disabled) {
+      toast.error('입력이 비활성화되어 있습니다.');
+      return;
+    }
+
+    // Send the keyboard input
+    if (onTranscript) {
+      onTranscript(keyboardInput.trim());
+      toast.success('메시지 전송 완료');
+    }
+
+    // Clear the input
+    setKeyboardInput('');
+  };
+
+  // Handle Enter key press
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleKeyboardSubmit();
+    }
+  };
+
+  // Toggle between voice and keyboard input modes
+  const toggleInputMode = () => {
+    setInputMode(prevMode => {
+      const newMode = prevMode === 'voice' ? 'keyboard' : 'voice';
+      
+      // If switching to keyboard mode, focus the input
+      if (newMode === 'keyboard') {
+        setTimeout(() => inputRef.current?.focus(), 100);
+      }
+      
+      // If switching from voice mode while recording, stop recording
+      if (prevMode === 'voice' && isRecording) {
+        stopRecording();
+      }
+      
+      return newMode;
+    });
+    setError(null);
+  };
+
+  // Show unsupported message only for voice mode
+  if (!isSupported && inputMode === 'voice') {
     return (
       <div className={`p-4 ${className}`}>
-        <div className="flex items-center space-x-3 text-red-600">
-          <AlertCircle className="w-5 h-5" />
-          <div>
-            <p className="text-sm font-medium">음성 인식 불가</p>
-            <p className="text-xs">{error || 'Chrome, Edge, Safari 브라우저를 사용해주세요.'}</p>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center space-x-3 text-red-600">
+            <AlertCircle className="w-5 h-5" />
+            <div>
+              <p className="text-sm font-medium">음성 인식 불가</p>
+              <p className="text-xs">{error || 'Chrome, Edge, Safari 브라우저를 사용해주세요.'}</p>
+            </div>
           </div>
+          <button
+            onClick={toggleInputMode}
+            className="p-2 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors"
+            title="키보드 입력으로 전환"
+          >
+            <Keyboard className="w-5 h-5 text-blue-600" />
+          </button>
         </div>
       </div>
     );
@@ -303,88 +372,177 @@ const VoiceRecorder = ({
 
   return (
     <div className={`p-4 ${className}`}>
-      <div className="flex items-center space-x-3">
+      {/* Input Mode Toggle Button */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm text-gray-600">
+          {inputMode === 'voice' ? '음성 입력' : '키보드 입력'}
+        </span>
         <button
-          onClick={toggleRecording}
-          disabled={disabled || !isConnected || isInitializing}
-          className={`relative p-3 rounded-full transition-all ${
-            isRecording 
-              ? 'bg-red-500 hover:bg-red-600' 
-              : disabled || !isConnected
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-blue-600 hover:bg-blue-700'
-          } ${error ? 'ring-2 ring-red-400' : ''}`}
-          title={
-            !isConnected 
-              ? '서버 연결 대기중' 
-              : disabled 
-                ? '음성 인식 비활성화' 
-                : isRecording 
-                  ? '녹음 중지' 
-                  : '녹음 시작'
-          }
+          onClick={toggleInputMode}
+          className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
+          title={inputMode === 'voice' ? '키보드 입력으로 전환' : '음성 입력으로 전환'}
         >
-          {isRecording ? (
+          {inputMode === 'voice' ? (
             <>
-              <MicOff className="w-6 h-6 text-white" />
-              <span className="absolute top-0 right-0 w-3 h-3 bg-red-400 rounded-full animate-pulse" />
+              <Keyboard className="w-4 h-4 text-gray-600" />
+              <span className="text-sm text-gray-600">키보드</span>
             </>
           ) : (
-            <Mic className={`w-6 h-6 ${disabled || !isConnected ? 'text-gray-300' : 'text-white'}`} />
+            <>
+              <Mic className="w-4 h-4 text-gray-600" />
+              <span className="text-sm text-gray-600">음성</span>
+            </>
           )}
         </button>
-        
-        <div className="flex-1">
-          {isInitializing && (
-            <div className="flex items-center">
-              <div className="flex space-x-1 mr-2">
-                <div className="w-1 h-3 bg-gray-400 rounded-full animate-pulse" />
-                <div className="w-1 h-3 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.1s' }} />
-                <div className="w-1 h-3 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
+      </div>
+
+      {/* Voice Input Mode */}
+      {inputMode === 'voice' && (
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={toggleRecording}
+            disabled={disabled || !isConnected || isInitializing}
+            className={`relative p-3 rounded-full transition-all ${
+              isRecording 
+                ? 'bg-red-500 hover:bg-red-600' 
+                : disabled || !isConnected
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700'
+            } ${error ? 'ring-2 ring-red-400' : ''}`}
+            title={
+              !isConnected 
+                ? '서버 연결 대기중' 
+                : disabled 
+                  ? '음성 인식 비활성화' 
+                  : isRecording 
+                    ? '녹음 중지' 
+                    : '녹음 시작'
+            }
+          >
+            {isRecording ? (
+              <>
+                <MicOff className="w-6 h-6 text-white" />
+                <span className="absolute top-0 right-0 w-3 h-3 bg-red-400 rounded-full animate-pulse" />
+              </>
+            ) : (
+              <Mic className={`w-6 h-6 ${disabled || !isConnected ? 'text-gray-300' : 'text-white'}`} />
+            )}
+          </button>
+          
+          <div className="flex-1">
+            {isInitializing && (
+              <div className="flex items-center">
+                <div className="flex space-x-1 mr-2">
+                  <div className="w-1 h-3 bg-gray-400 rounded-full animate-pulse" />
+                  <div className="w-1 h-3 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.1s' }} />
+                  <div className="w-1 h-3 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
+                </div>
+                <span className="text-sm text-gray-600">초기화 중...</span>
               </div>
-              <span className="text-sm text-gray-600">초기화 중...</span>
-            </div>
-          )}
-          
-          {isRecording && !isInitializing && (
-            <div className="flex items-center">
-              <div className="flex space-x-1 mr-2">
-                <div className="w-1 h-4 bg-blue-400 rounded-full animate-bounce" />
-                <div className="w-1 h-4 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                <div className="w-1 h-4 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+            )}
+            
+            {isRecording && !isInitializing && (
+              <div className="flex items-center">
+                <div className="flex space-x-1 mr-2">
+                  <div className="w-1 h-4 bg-blue-400 rounded-full animate-bounce" />
+                  <div className="w-1 h-4 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                  <div className="w-1 h-4 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                </div>
+                <span className="text-sm text-gray-600">듣고 있습니다...</span>
               </div>
-              <span className="text-sm text-gray-600">듣고 있습니다...</span>
-            </div>
-          )}
+            )}
+            
+            {transcript && (
+              <div className="mt-1">
+                <p className="text-sm text-gray-700 italic">"{transcript}"</p>
+              </div>
+            )}
+            
+            {!isConnected && !isRecording && (
+              <div className="flex items-center text-yellow-600">
+                <AlertCircle className="w-4 h-4 mr-1" />
+                <p className="text-sm">서버 연결 대기중...</p>
+              </div>
+            )}
+            
+            {isConnected && !isRecording && !transcript && !error && !isInitializing && (
+              <div>
+                <p className="text-sm text-gray-500">마이크를 클릭하여 음성 명령을 시작하세요</p>
+                <p className="text-xs text-gray-400 mt-1">예: "테슬라 뉴스 보여줘", "SQQQ 17불 100주 매수대기"</p>
+              </div>
+            )}
+            
+            {error && !isRecording && (
+              <div className="flex items-center text-red-600">
+                <AlertCircle className="w-4 h-4 mr-1" />
+                <p className="text-sm">{error}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard Input Mode */}
+      {inputMode === 'keyboard' && (
+        <div className="space-y-3">
+          <div className="flex items-center space-x-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={keyboardInput}
+              onChange={(e) => setKeyboardInput(e.target.value)}
+              onKeyPress={handleKeyPress}
+              disabled={disabled || !isConnected}
+              placeholder={
+                !isConnected 
+                  ? '서버 연결 대기중...' 
+                  : '메시지를 입력하세요 (Enter로 전송)'
+              }
+              className={`flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 ${
+                disabled || !isConnected 
+                  ? 'bg-gray-100 border-gray-300 cursor-not-allowed' 
+                  : 'bg-white border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+              }`}
+            />
+            <button
+              onClick={handleKeyboardSubmit}
+              disabled={disabled || !isConnected || !keyboardInput.trim()}
+              className={`p-2.5 rounded-lg transition-all ${
+                disabled || !isConnected || !keyboardInput.trim()
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+              title="메시지 전송"
+            >
+              <Send className={`w-5 h-5 ${
+                disabled || !isConnected || !keyboardInput.trim() 
+                  ? 'text-gray-300' 
+                  : 'text-white'
+              }`} />
+            </button>
+          </div>
           
-          {transcript && (
-            <div className="mt-1">
-              <p className="text-sm text-gray-700 italic">"{transcript}"</p>
-            </div>
-          )}
-          
-          {!isConnected && !isRecording && (
+          {!isConnected && (
             <div className="flex items-center text-yellow-600">
               <AlertCircle className="w-4 h-4 mr-1" />
               <p className="text-sm">서버 연결 대기중...</p>
             </div>
           )}
           
-          {isConnected && !isRecording && !transcript && !error && !isInitializing && (
-            <div>
-              <p className="text-sm text-gray-500">마이크를 클릭하여 음성 명령을 시작하세요</p>
-              <p className="text-xs text-gray-400 mt-1">예: "테슬라 뉴스 보여줘", "SQQQ 17불 100주 매수대기"</p>
-            </div>
+          {isConnected && !error && (
+            <p className="text-xs text-gray-400">
+              예: "테슬라 뉴스 보여줘", "SQQQ 17불 100주 매수대기", "나스닥 현재 지수"
+            </p>
           )}
           
-          {error && !isRecording && (
+          {error && (
             <div className="flex items-center text-red-600">
               <AlertCircle className="w-4 h-4 mr-1" />
               <p className="text-sm">{error}</p>
             </div>
           )}
         </div>
-      </div>
+      )}
       
       {/* Connection status indicator */}
       <div className={`mt-2 text-xs ${isConnected ? 'text-green-600' : 'text-red-600'}`}>
