@@ -358,6 +358,19 @@ const Dashboard = ({ onLogout }) => {
     window.location.reload();
   };
 
+  // 칸반보드 관련 키워드 체크 함수
+  const checkKanbanKeywords = (text) => {
+    const kanbanKeywords = [
+      '매매이력', '매매현황', '수익현황', '칸반보드', '칸반',
+      '거래이력', '거래현황', '투자현황', '포트폴리오',
+      '매수현황', '매도현황', '보유현황', '보유종목',
+      '수익률', '손익현황', '투자이력'
+    ];
+    
+    const lowerText = text.toLowerCase().replace(/\s/g, '');
+    return kanbanKeywords.some(keyword => lowerText.includes(keyword));
+  };
+
   // 커스텀 소켓 메시지 처리 (중복 방지 개선 + 스냅샷 저장)
   useEffect(() => {
     if (activeMenu !== 'home' || !customSocketMessage || processingMessage.current) {
@@ -543,6 +556,36 @@ const Dashboard = ({ onLogout }) => {
 
   // 커스텀 소켓을 통한 메시지 송신 함수
   const sendCustomMessage = (message, type = 'voice-command') => {
+    // 칸반보드 관련 키워드 체크
+    if (checkKanbanKeywords(message)) {
+      console.log('📋 Kanban keywords detected, switching to kanban view');
+      setCurrentView('kanban');
+      setViewTimestamp(new Date().toISOString());
+      setIsHistoricalView(false);
+      toast.success('칸반보드를 표시합니다');
+      
+      // 칸반보드 표시 메시지를 채팅에 추가
+      addMessage('칸반보드를 표시합니다', 'system');
+      
+      // 원래 메시지도 서버로 전송 (서버에서 추가 처리할 수 있도록)
+      if (customSocket && isCustomSocketConnected) {
+        const commandId = sessionManager.getCommandId() || `cmd_${user.id}_${Date.now()}`;
+        
+        customSocket.emit(type, {
+          text: message,
+          userId: user.id,
+          commandId,
+          sessionId: sessionManager.getSessionId(),
+          timestamp: new Date().toISOString()
+        });
+        
+        sessionManager.updateCommandId(commandId);
+        console.log('📤 Message sent via custom socket:', message, 'with commandId:', commandId);
+      }
+      return;
+    }
+    
+    // 기존 메시지 송신 로직
     if (customSocket && isCustomSocketConnected) {
       const commandId = sessionManager.getCommandId() || `cmd_${user.id}_${Date.now()}`;
       
@@ -593,6 +636,25 @@ const Dashboard = ({ onLogout }) => {
   const handleVoiceInput = (text) => {
     addMessage(text, 'user');
     
+    // 칸반보드 관련 키워드 체크 (음성 입력)
+    if (checkKanbanKeywords(text)) {
+      console.log('📋 Kanban keywords detected in voice input');
+      setCurrentView('kanban');
+      setViewTimestamp(new Date().toISOString());
+      setIsHistoricalView(false);
+      toast.success('칸반보드를 표시합니다');
+      addMessage('칸반보드를 표시합니다', 'system');
+      
+      // 서버에도 메시지 전송 (추가 처리를 위해)
+      if (customSocket && isCustomSocketConnected) {
+        sendCustomMessage(text);
+      } else if (socket && isConnected) {
+        sendVoiceCommand(text);
+      }
+      return;
+    }
+    
+    // 기존 음성 입력 처리
     if (customSocket && isCustomSocketConnected) {
       sendCustomMessage(text);
     } else if (socket && isConnected) {
@@ -665,6 +727,7 @@ const Dashboard = ({ onLogout }) => {
                   <p className="text-gray-600">• "테슬라 최신 뉴스 보여줘"</p>
                   <p className="text-gray-600">• "SQQQ 17.9불 1천주 매수대기"</p>
                   <p className="text-gray-600">• "나스닥 현재 지수 알려줘"</p>
+                  <p className="text-gray-600">• "현재 매매현황 보여줘"</p>
                 </div>
               </div>
               
