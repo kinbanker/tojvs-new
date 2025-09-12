@@ -11,12 +11,15 @@ import NewsDisplay from './NewsDisplay';
 import MarketDisplay from './MarketDisplay';
 import PlanManagement from './PlanManagement';
 import Profile from './Profile';
+import DataFreshnessIndicator from './DataFreshnessIndicator';
 import apiUtils from '../utils/api';
 
 const Dashboard = ({ onLogout }) => {
   const [activeMenu, setActiveMenu] = useState('home');
   const [currentView, setCurrentView] = useState('welcome');
   const [viewData, setViewData] = useState(null);
+  const [viewTimestamp, setViewTimestamp] = useState(null);
+  const [isHistoricalView, setIsHistoricalView] = useState(false);
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [customSocket, setCustomSocket] = useState(null);
@@ -28,7 +31,7 @@ const Dashboard = ({ onLogout }) => {
   const lastProcessedMessageId = useRef(null);
   const processingMessage = useRef(false);
   const toastIdRef = useRef(null);
-  const lastMessageIdRef = useRef(null); // 마지막 처리한 메시지 ID 추적
+  const lastMessageIdRef = useRef(null);
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
@@ -45,9 +48,9 @@ const Dashboard = ({ onLogout }) => {
   useEffect(() => {
     if (activeMenu !== 'home') {
       clearAllToasts();
-      // 홈이 아닌 경우 메시지 처리 초기화
       setCustomSocketMessage(null);
       lastProcessedMessageId.current = null;
+      setIsHistoricalView(false);
     }
   }, [activeMenu]);
 
@@ -148,16 +151,13 @@ const Dashboard = ({ onLogout }) => {
     socketInstance.on('command-result', (message) => {
       console.log('Received result via custom socket:', message);
       
-      // 고유 메시지 ID 생성
       const messageId = `${message.timestamp}_${message.type}_${message.commandId || ''}`;
       
-      // 이미 처리한 메시지인지 확인
       if (lastProcessedMessageId.current === messageId) {
         console.log('Duplicate message detected, skipping:', messageId);
         return;
       }
       
-      // 홈 화면일 때만 메시지 처리
       if (activeMenu === 'home') {
         lastProcessedMessageId.current = messageId;
         setCustomSocketMessage(message);
@@ -174,7 +174,6 @@ const Dashboard = ({ onLogout }) => {
         return;
       }
       
-      // 홈 화면일 때만 메시지 처리
       if (activeMenu === 'home') {
         lastProcessedMessageId.current = messageId;
         setCustomSocketMessage(result);
@@ -285,19 +284,16 @@ const Dashboard = ({ onLogout }) => {
     toast.info('연결을 다시 시도합니다...');
   };
 
-  // 커스텀 소켓 메시지 처리 (중복 방지 개선)
+  // 커스텀 소켓 메시지 처리 (중복 방지 개선 + 스냅샷 저장)
   useEffect(() => {
-    // 홈 화면이 아니거나 이미 처리중이면 스킵
     if (activeMenu !== 'home' || !customSocketMessage || processingMessage.current) {
       return;
     }
     
     const { type, data, timestamp, commandId } = customSocketMessage;
     
-    // 고유 ID 생성
     const messageUniqueId = `${timestamp}_${type}_${commandId || Date.now()}`;
     
-    // 이미 처리한 메시지면 스킵
     if (lastMessageIdRef.current === messageUniqueId) {
       console.log('Message already processed:', messageUniqueId);
       return;
@@ -306,11 +302,13 @@ const Dashboard = ({ onLogout }) => {
     processingMessage.current = true;
     lastMessageIdRef.current = messageUniqueId;
     
-    // Toast 메시지 표시 (이전 toast 제거)
     if (toastIdRef.current) {
       toast.dismiss(toastIdRef.current);
       toastIdRef.current = null;
     }
+    
+    // 스냅샷 데이터 생성
+    let snapshot = null;
     
     switch(type) {
       case 'news':
@@ -319,7 +317,21 @@ const Dashboard = ({ onLogout }) => {
           toastIdRef.current = toast.success(`${articleCount}개의 뉴스를 찾았습니다`);
           setCurrentView('news');
           setViewData(data);
-          addMessage(`뉴스를 찾았습니다: ${data.keyword || data.ticker}`, 'system', messageUniqueId);
+          setViewTimestamp(timestamp);
+          setIsHistoricalView(false);
+          
+          // 뉴스 스냅샷 저장
+          snapshot = {
+            type: 'news',
+            data: {
+              keyword: data.keyword,
+              ticker: data.ticker,
+              articles: data.articles?.slice(0, 3) // 처음 3개만 저장
+            },
+            timestamp
+          };
+          
+          addMessage(`뉴스를 찾았습니다: ${data.keyword || data.ticker}`, 'system', messageUniqueId, snapshot);
         }
         break;
         
@@ -327,8 +339,17 @@ const Dashboard = ({ onLogout }) => {
         if (data.action === 'ADD_CARD') {
           toastIdRef.current = toast.success('칸반 카드가 추가되었습니다');
           setCurrentView('kanban');
-          // 메시지 추가 시 고유 ID 사용
-          addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system', messageUniqueId);
+          setViewTimestamp(timestamp);
+          setIsHistoricalView(false);
+          
+          // 칸반 스냅샷 저장
+          snapshot = {
+            type: 'kanban',
+            data: data.card,
+            timestamp
+          };
+          
+          addMessage(`${data.card.ticker} ${data.card.column} 추가됨`, 'system', messageUniqueId, snapshot);
         }
         break;
         
@@ -336,23 +357,101 @@ const Dashboard = ({ onLogout }) => {
         toastIdRef.current = toast.success('시장 데이터를 불러왔습니다');
         setCurrentView('market');
         setViewData(data);
-        addMessage(`${data.name || data.ticker}: $${data.price?.toLocaleString()}`, 'system', messageUniqueId);
+        setViewTimestamp(timestamp);
+        setIsHistoricalView(false);
+        
+        // 시장 데이터 스냅샷 저장
+        snapshot = {
+          type: 'market',
+          data: {
+            ticker: data.ticker,
+            name: data.name,
+            price: data.price,
+            change: data.change,
+            changePercent: data.changePercent
+          },
+          timestamp
+        };
+        
+        addMessage(`${data.name || data.ticker}: $${data.price?.toLocaleString()}`, 'system', messageUniqueId, snapshot);
         break;
         
       case 'chart':
         setCurrentView('chart');
         setViewData(data);
+        setViewTimestamp(timestamp);
+        setIsHistoricalView(false);
         break;
         
       default:
         break;
     }
     
-    // 메시지 처리 완료
     setTimeout(() => {
       processingMessage.current = false;
     }, 100);
   }, [customSocketMessage, activeMenu]);
+
+  // 메시지 클릭 핸들러
+  const handleMessageClick = (message, messageType) => {
+    console.log('Message clicked:', message, messageType);
+    
+    // 홈 메뉴로 전환 (이미 홈이면 유지)
+    if (activeMenu !== 'home') {
+      setActiveMenu('home');
+    }
+    
+    // 스냅샷 데이터가 있는 경우
+    if (message.snapshot) {
+      const timeDiff = Date.now() - new Date(message.timestamp).getTime();
+      
+      // 데이터 타입별 처리
+      switch(messageType) {
+        case 'news':
+          // 뉴스는 5분 이상 지났으면 과거 데이터로 표시
+          setIsHistoricalView(timeDiff > 5 * 60 * 1000);
+          setCurrentView('news');
+          setViewData(message.snapshot.data);
+          setViewTimestamp(message.snapshot.timestamp);
+          break;
+          
+        case 'market':
+          // 시장 데이터는 1초 이상 지났으면 과거 데이터로 표시
+          setIsHistoricalView(timeDiff > 1000);
+          setCurrentView('market');
+          setViewData(message.snapshot.data);
+          setViewTimestamp(message.snapshot.timestamp);
+          break;
+          
+        case 'kanban':
+          // 칸반은 현재 데이터를 보여주되, 변경사항 표시
+          setCurrentView('kanban');
+          setViewTimestamp(message.snapshot.timestamp);
+          setIsHistoricalView(false); // 칸반은 항상 현재 상태 표시
+          
+          // 과거 카드 정보는 별도로 전달
+          if (message.snapshot.data) {
+            // TODO: KanbanBoard에 하이라이트할 카드 정보 전달
+            console.log('Historical card data:', message.snapshot.data);
+          }
+          break;
+          
+        default:
+          break;
+      }
+    } else {
+      // 스냅샷이 없는 경우 현재 뷰로 이동
+      switch(messageType) {
+        case 'news':
+        case 'market':
+        case 'kanban':
+          setCurrentView(messageType);
+          setIsHistoricalView(false);
+          setViewTimestamp(new Date().toISOString());
+          break;
+      }
+    }
+  };
 
   // 커스텀 소켓을 통한 메시지 송신 함수
   const sendCustomMessage = (message, type = 'voice-command') => {
@@ -371,16 +470,14 @@ const Dashboard = ({ onLogout }) => {
     }
   };
 
-  // 메시지 추가 함수 (중복 방지 개선)
-  const addMessage = (text, sender = 'user', messageId = null) => {
+  // 메시지 추가 함수 (스냅샷 지원)
+  const addMessage = (text, sender = 'user', messageId = null, snapshot = null) => {
     setMessages(prev => {
-      // messageId로 중복 체크
       if (messageId && prev.some(msg => msg.messageId === messageId)) {
         console.log('Duplicate chat message prevented:', messageId);
         return prev;
       }
       
-      // 같은 텍스트가 1초 이내에 추가되는 것 방지
       const lastMessage = prev[prev.length - 1];
       if (lastMessage && lastMessage.text === text && 
           new Date() - lastMessage.timestamp < 1000) {
@@ -392,7 +489,8 @@ const Dashboard = ({ onLogout }) => {
         messageId: messageId,
         text,
         sender,
-        timestamp: new Date()
+        timestamp: new Date(),
+        snapshot: snapshot // 스냅샷 데이터 저장
       }];
     });
   };
@@ -400,7 +498,6 @@ const Dashboard = ({ onLogout }) => {
   const handleVoiceInput = (text) => {
     addMessage(text, 'user');
     
-    // 우선순위: 커스텀 소켓 → useSocket 훅
     if (customSocket && isCustomSocketConnected) {
       sendCustomMessage(text);
     } else if (socket && isConnected) {
@@ -523,7 +620,17 @@ const Dashboard = ({ onLogout }) => {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
           >
-            <NewsDisplay data={viewData} isConnected={isAnySocketConnected} />
+            {viewTimestamp && (
+              <DataFreshnessIndicator 
+                type="news"
+                timestamp={viewTimestamp}
+              />
+            )}
+            <NewsDisplay 
+              data={viewData} 
+              isConnected={isAnySocketConnected}
+              isHistorical={isHistoricalView}
+            />
           </motion.div>
         )}
         
@@ -534,7 +641,17 @@ const Dashboard = ({ onLogout }) => {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
           >
-            <MarketDisplay data={viewData} isConnected={isAnySocketConnected} />
+            {viewTimestamp && (
+              <DataFreshnessIndicator 
+                type="market"
+                timestamp={viewTimestamp}
+              />
+            )}
+            <MarketDisplay 
+              data={viewData} 
+              isConnected={isAnySocketConnected}
+              isHistorical={isHistoricalView}
+            />
           </motion.div>
         )}
         
@@ -545,6 +662,12 @@ const Dashboard = ({ onLogout }) => {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
           >
+            {viewTimestamp && (
+              <DataFreshnessIndicator 
+                type="kanban"
+                timestamp={viewTimestamp}
+              />
+            )}
             <KanbanBoard 
               socket={customSocket || socket} 
               lastMessage={customSocketMessage || lastMessage}
@@ -579,6 +702,7 @@ const Dashboard = ({ onLogout }) => {
           isLoading={false}
           error={null}
           disabled={false}
+          onMessageClick={handleMessageClick}
         />
         
         <VoiceRecorder 
@@ -599,9 +723,9 @@ const Dashboard = ({ onLogout }) => {
                 onClick={() => { 
                   setActiveMenu('home'); 
                   clearAllToasts();
-                  // 홈으로 돌아올 때 메시지 처리 상태 초기화
                   lastProcessedMessageId.current = null;
                   lastMessageIdRef.current = null;
+                  setIsHistoricalView(false);
                 }}
                 className={`flex items-center px-4 py-2 rounded-lg transition ${
                   activeMenu === 'home' 
