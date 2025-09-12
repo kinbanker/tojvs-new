@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import io from 'socket.io-client';
 import toast from 'react-hot-toast';
+import sessionManager from '../utils/sessionManager';
 
 const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_URL || 
   (process.env.NODE_ENV === 'production' 
@@ -25,13 +26,26 @@ export const useSocket = (userId) => {
       return;
     }
 
+    // 기존 세션 정보 확인
+    const existingSession = sessionManager.getSession();
+    console.log('Existing session:', existingSession);
+
     const connectSocket = () => {
       try {
+        // 세션 ID를 auth에 포함
+        const sessionId = sessionManager.getSessionId();
+        const previousSocketId = sessionManager.getSocketId();
+        
         socketRef.current = io(SOCKET_SERVER_URL, {
-          auth: { token },
+          auth: { 
+            token,
+            sessionId,
+            previousSocketId,
+            userId
+          },
           transports: ['websocket', 'polling'],
           reconnection: true,
-          reconnectionAttempts: 5,
+          reconnectionAttempts: 10, // 재연결 시도 횟수 증가
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,
           timeout: 10000
@@ -39,20 +53,27 @@ export const useSocket = (userId) => {
 
         // Connection established
         socketRef.current.on('connect', () => {
-          console.log('Socket connected');
+          console.log('Socket connected:', socketRef.current.id);
           setIsConnected(true);
           setConnectionError(null);
-          reconnectAttemptsRef.current = 0;
+          
+          // 소켓 ID를 세션에 저장
+          sessionManager.updateSocketId(socketRef.current.id);
           
           if (reconnectAttemptsRef.current > 0) {
             toast.success('재연결되었습니다');
+            sessionManager.resetReconnectCount();
           }
+          reconnectAttemptsRef.current = 0;
         });
 
         // Connection lost
         socketRef.current.on('disconnect', (reason) => {
           console.log('Socket disconnected:', reason);
           setIsConnected(false);
+          
+          // 재연결 카운트 증가
+          sessionManager.incrementReconnectCount();
           
           if (reason === 'io server disconnect') {
             // Server initiated disconnect, try to reconnect
@@ -66,11 +87,18 @@ export const useSocket = (userId) => {
           setConnectionError(error.message);
           reconnectAttemptsRef.current++;
           
+          // 세션 복구 시도
           if (reconnectAttemptsRef.current === 1) {
-            toast.error('서버 연결 중... 잠시만 기다려주세요');
+            const session = sessionManager.getSession();
+            if (session && session.socketId) {
+              console.log('Attempting session recovery with socket ID:', session.socketId);
+              toast.loading('서버 연결 복구 중... 잠시만 기다려주세요');
+            } else {
+              toast.error('서버 연결 중... 잠시만 기다려주세요');
+            }
           }
           
-          if (reconnectAttemptsRef.current > 5) {
+          if (reconnectAttemptsRef.current > 10) {
             toast.error('서버 연결 실패. 페이지를 새로고침해주세요');
           }
         });
@@ -78,17 +106,23 @@ export const useSocket = (userId) => {
         // Reconnection attempts
         socketRef.current.on('reconnect_attempt', (attemptNumber) => {
           console.log(`Reconnection attempt ${attemptNumber}`);
+          sessionManager.incrementReconnectCount();
         });
 
         // Successfully reconnected
         socketRef.current.on('reconnect', (attemptNumber) => {
           console.log(`Reconnected after ${attemptNumber} attempts`);
           toast.success('서버에 재연결되었습니다');
+          sessionManager.resetReconnectCount();
         });
 
         // Server messages
         socketRef.current.on('connected', (data) => {
           console.log('Server confirmed connection:', data);
+          // 서버에서 전달받은 세션 정보 저장
+          if (data.sessionId) {
+            sessionManager.updateCommandId(data.sessionId);
+          }
         });
 
         // Command processing status - 중복 방지 개선
@@ -112,6 +146,11 @@ export const useSocket = (userId) => {
           
           processedEventIds.current.add(messageId);
           setLastMessage(message);
+          
+          // 커맨드 ID 저장
+          if (message.commandId) {
+            sessionManager.updateCommandId(message.commandId);
+          }
           
           // Toast 중복 방지 - 1초 이내 같은 타입의 toast는 표시하지 않음
           const now = Date.now();
@@ -138,6 +177,11 @@ export const useSocket = (userId) => {
           
           processedEventIds.current.add(messageId);
           setLastMessage(result);
+          
+          // 커맨드 ID 저장
+          if (result.commandId) {
+            sessionManager.updateCommandId(result.commandId);
+          }
           
           // Toast 중복 방지
           const now = Date.now();
@@ -175,10 +219,22 @@ export const useSocket = (userId) => {
           // Error toast는 Dashboard에서 처리
         });
 
+        // Session recovery 이벤트
+        socketRef.current.on('session-recovered', (data) => {
+          console.log('Session recovered:', data);
+          toast.success('세션이 복구되었습니다');
+          if (data.socketId) {
+            sessionManager.updateSocketId(data.socketId);
+          }
+        });
+
         // Debug socket in development
         if (process.env.NODE_ENV === 'development') {
           window.debugSocket = socketRef.current;
-          console.log('🔧 Debug socket available: window.debugSocket');
+          window.sessionManager = sessionManager;
+          console.log('🔧 Debug tools available:');
+          console.log('  - window.debugSocket: Socket instance');
+          console.log('  - window.sessionManager: Session manager');
         }
 
       } catch (error) {
@@ -220,17 +276,23 @@ export const useSocket = (userId) => {
     }
     
     try {
+      const commandId = sessionManager.getCommandId() || `cmd_${userId}_${Date.now()}`;
       socketRef.current.emit('voice-command', {
         text,
+        commandId,
+        sessionId: sessionManager.getSessionId(),
         timestamp: new Date().toISOString()
       });
+      
+      // 새 커맨드 ID 저장
+      sessionManager.updateCommandId(commandId);
       return true;
     } catch (error) {
       console.error('Failed to send voice command:', error);
       toast.error('명령 전송 실패');
       return false;
     }
-  }, [isConnected]);
+  }, [isConnected, userId]);
   
   // Move kanban card
   const moveCard = useCallback((cardId, fromColumn, toColumn) => {
@@ -243,7 +305,8 @@ export const useSocket = (userId) => {
       socketRef.current.emit('move-card', {
         cardId,
         fromColumn,
-        toColumn
+        toColumn,
+        sessionId: sessionManager.getSessionId()
       });
       return true;
     } catch (error) {
@@ -256,6 +319,8 @@ export const useSocket = (userId) => {
   // Manual reconnect
   const reconnect = useCallback(() => {
     if (socketRef.current) {
+      // 세션 정보 새로고침
+      sessionManager.refreshSession();
       socketRef.current.connect();
     }
   }, []);
@@ -267,6 +332,7 @@ export const useSocket = (userId) => {
     sendVoiceCommand,
     moveCard,
     reconnect,
-    socket: socketRef.current
+    socket: socketRef.current,
+    sessionId: sessionManager.getSessionId()
   };
 };

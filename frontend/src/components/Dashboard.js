@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Home, CreditCard, User, LogOut, TrendingUp } from 'lucide-react';
+import { Home, CreditCard, User, LogOut, TrendingUp, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { io } from 'socket.io-client';
 import { useSocket } from '../hooks/useSocket';
@@ -13,6 +13,7 @@ import PlanManagement from './PlanManagement';
 import Profile from './Profile';
 import DataFreshnessIndicator from './DataFreshnessIndicator';
 import apiUtils from '../utils/api';
+import sessionManager from '../utils/sessionManager';
 
 const Dashboard = ({ onLogout }) => {
   const [activeMenu, setActiveMenu] = useState('home');
@@ -34,7 +35,7 @@ const Dashboard = ({ onLogout }) => {
   const lastMessageIdRef = useRef(null);
   
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const { isConnected, lastMessage, sendVoiceCommand, socket } = useSocket(user.id);
+  const { isConnected, lastMessage, sendVoiceCommand, socket, sessionId } = useSocket(user.id);
 
   // 통합 연결 상태
   const isAnySocketConnected = isCustomSocketConnected || isConnected;
@@ -43,6 +44,21 @@ const Dashboard = ({ onLogout }) => {
   const clearAllToasts = () => {
     toast.dismiss();
   };
+
+  // 컴포넌트 마운트 시 세션 확인
+  useEffect(() => {
+    const session = sessionManager.getSession();
+    if (session && session.userId === user.id) {
+      console.log('Restored session:', session);
+      // 세션이 유효하면 자동 재연결 시도
+      if (session.socketId && !isAnySocketConnected) {
+        toast.loading('이전 세션 복구 중...', { duration: 2000 });
+      }
+    } else if (user.id) {
+      // 새 세션 생성
+      sessionManager.createNewSession();
+    }
+  }, [user.id]);
 
   // 메뉴 변경 시 처리
   useEffect(() => {
@@ -57,15 +73,20 @@ const Dashboard = ({ onLogout }) => {
   // 소켓 연결 함수들
   const createSocketWithPolling = () => {
     console.log('🔄 Trying Socket.IO with polling transport...');
+    const session = sessionManager.getSession();
+    
     return io('https://dev.tojvs.com', {
       path: '/socket.io/',
       transports: ['polling'],
       upgrade: false,
       auth: {
-        token: localStorage.getItem('token')
+        token: localStorage.getItem('token'),
+        sessionId: session?.sessionId,
+        userId: user.id,
+        previousSocketId: session?.socketId
       },
       reconnection: true,
-      reconnectionAttempts: 3,
+      reconnectionAttempts: 5,
       reconnectionDelay: 2000,
       timeout: 10000
     });
@@ -73,15 +94,20 @@ const Dashboard = ({ onLogout }) => {
 
   const createSocketWithWebsocket = () => {
     console.log('🔄 Trying Socket.IO with websocket transport...');
+    const session = sessionManager.getSession();
+    
     return io('https://dev.tojvs.com', {
       path: '/socket.io/',
       transports: ['websocket'],
       forceNew: true,
       auth: {
-        token: localStorage.getItem('token')
+        token: localStorage.getItem('token'),
+        sessionId: session?.sessionId,
+        userId: user.id,
+        previousSocketId: session?.socketId
       },
       reconnection: true,
-      reconnectionAttempts: 2,
+      reconnectionAttempts: 3,
       reconnectionDelay: 1000,
       timeout: 5000
     });
@@ -89,25 +115,35 @@ const Dashboard = ({ onLogout }) => {
 
   const createSocketRelativePath = () => {
     console.log('🔄 Trying Socket.IO with relative path...');
+    const session = sessionManager.getSession();
+    
     return io('/', {
       path: '/socket.io/',
       transports: ['polling', 'websocket'],
       auth: {
-        token: localStorage.getItem('token')
+        token: localStorage.getItem('token'),
+        sessionId: session?.sessionId,
+        userId: user.id,
+        previousSocketId: session?.socketId
       },
       reconnection: true,
-      reconnectionAttempts: 3,
+      reconnectionAttempts: 5,
       reconnectionDelay: 1000
     });
   };
 
   const createSocketHttp = () => {
     console.log('🔄 Trying Socket.IO with HTTP (fallback)...');
+    const session = sessionManager.getSession();
+    
     return io('http://dev.tojvs.com', {
       path: '/socket.io/',
       transports: ['polling'],
       auth: {
-        token: localStorage.getItem('token')
+        token: localStorage.getItem('token'),
+        sessionId: session?.sessionId,
+        userId: user.id,
+        previousSocketId: session?.socketId
       },
       reconnection: false,
       timeout: 5000
@@ -120,6 +156,10 @@ const Dashboard = ({ onLogout }) => {
       console.log(`✅ ${connectionType} socket connected:`, socketInstance.id);
       setIsCustomSocketConnected(true);
       setConnectionAttempts(0);
+      
+      // 소켓 ID를 세션에 저장
+      sessionManager.updateSocketId(socketInstance.id);
+      
       if (activeMenu === 'home') {
         toast.success(`서버에 연결되었습니다 (${connectionType})`);
       }
@@ -128,6 +168,10 @@ const Dashboard = ({ onLogout }) => {
     socketInstance.on('disconnect', (reason) => {
       console.log(`❌ ${connectionType} socket disconnected:`, reason);
       setIsCustomSocketConnected(false);
+      
+      // 재연결 카운트 증가
+      sessionManager.incrementReconnectCount();
+      
       if (reason !== 'io client disconnect' && activeMenu === 'home') {
         toast.error('서버 연결이 끊어졌습니다.');
       }
@@ -142,9 +186,20 @@ const Dashboard = ({ onLogout }) => {
     socketInstance.on('reconnect', (attemptNumber) => {
       console.log(`🔄 ${connectionType} reconnected after`, attemptNumber, 'attempts');
       setIsCustomSocketConnected(true);
+      sessionManager.resetReconnectCount();
+      
       if (activeMenu === 'home') {
         toast.success('서버에 재연결되었습니다.');
       }
+    });
+
+    // 세션 복구 이벤트
+    socketInstance.on('session-recovered', (data) => {
+      console.log('Session recovered:', data);
+      if (data.commandId) {
+        sessionManager.updateCommandId(data.commandId);
+      }
+      toast.success('이전 세션이 복구되었습니다');
     });
 
     // 커스텀 소켓의 메시지 처리 (중복 방지)
@@ -156,6 +211,11 @@ const Dashboard = ({ onLogout }) => {
       if (lastProcessedMessageId.current === messageId) {
         console.log('Duplicate message detected, skipping:', messageId);
         return;
+      }
+      
+      // 커맨드 ID 저장
+      if (message.commandId) {
+        sessionManager.updateCommandId(message.commandId);
       }
       
       if (activeMenu === 'home') {
@@ -172,6 +232,11 @@ const Dashboard = ({ onLogout }) => {
       if (lastProcessedMessageId.current === messageId) {
         console.log('Duplicate voiceCommandResult detected, skipping:', messageId);
         return;
+      }
+      
+      // 커맨드 ID 저장
+      if (result.commandId) {
+        sessionManager.updateCommandId(result.commandId);
       }
       
       if (activeMenu === 'home') {
@@ -206,7 +271,7 @@ const Dashboard = ({ onLogout }) => {
     if (connectionAttempts >= 4) {
       console.log('❌ All connection attempts failed');
       if (activeMenu === 'home') {
-        toast.error('서버 연결에 실패했습니다. 모든 방법을 시도했습니다.');
+        toast.error('서버 연결에 실패했습니다. 새로고침 버튼을 눌러주세요.');
       }
       return;
     }
@@ -281,7 +346,16 @@ const Dashboard = ({ onLogout }) => {
     if (customSocket) {
       customSocket.disconnect();
     }
+    // 세션 새로고침
+    sessionManager.refreshSession();
     toast.info('연결을 다시 시도합니다...');
+  };
+
+  // 페이지 새로고침 함수
+  const handlePageRefresh = () => {
+    // 세션 저장
+    sessionManager.saveSession();
+    window.location.reload();
   };
 
   // 커스텀 소켓 메시지 처리 (중복 방지 개선 + 스냅샷 저장)
@@ -470,12 +544,19 @@ const Dashboard = ({ onLogout }) => {
   // 커스텀 소켓을 통한 메시지 송신 함수
   const sendCustomMessage = (message, type = 'voice-command') => {
     if (customSocket && isCustomSocketConnected) {
+      const commandId = sessionManager.getCommandId() || `cmd_${user.id}_${Date.now()}`;
+      
       customSocket.emit(type, {
         text: message,
         userId: user.id,
+        commandId,
+        sessionId: sessionManager.getSessionId(),
         timestamp: new Date().toISOString()
       });
-      console.log('📤 Message sent via custom socket:', message);
+      
+      // 커맨드 ID 저장
+      sessionManager.updateCommandId(commandId);
+      console.log('📤 Message sent via custom socket:', message, 'with commandId:', commandId);
     } else {
       console.warn('❌ Custom socket not connected, cannot send message');
       if (activeMenu === 'home') {
@@ -526,6 +607,9 @@ const Dashboard = ({ onLogout }) => {
   // 로그아웃 개선
   const handleLogout = async () => {
     clearAllToasts();
+    
+    // 세션 정리
+    sessionManager.logout();
     
     try {
       await apiUtils.logout();
@@ -608,19 +692,29 @@ const Dashboard = ({ onLogout }) => {
                     <p>연결 시도: {connectionAttempts + 1}/4</p>
                     <p>토큰 존재: {localStorage.getItem('token') ? '✅' : '❌'}</p>
                     <p>사용자 ID: {user.id || '없음'}</p>
+                    <p>세션 ID: {sessionId || sessionManager.getSessionId() || '없음'}</p>
                     {customSocket && (
                       <p>소켓 ID: {customSocket.id || '연결 중...'}</p>
                     )}
                   </div>
                   
-                  {!isAnySocketConnected && (
+                  <div className="flex gap-2 mt-3">
+                    {!isAnySocketConnected && (
+                      <button
+                        onClick={handleManualReconnect}
+                        className="flex-1 flex items-center justify-center px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        다시 연결
+                      </button>
+                    )}
                     <button
-                      onClick={handleManualReconnect}
-                      className="mt-3 px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors"
+                      onClick={handlePageRefresh}
+                      className="flex-1 px-4 py-2 bg-gray-500 text-white text-sm rounded hover:bg-gray-600 transition-colors"
                     >
-                      다시 연결 시도
+                      페이지 새로고침
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
             </div>
