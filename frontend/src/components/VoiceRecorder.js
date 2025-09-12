@@ -17,7 +17,9 @@ const VoiceRecorder = ({
   onTranscript, 
   className = '',
   isConnected = false,
-  disabled = false 
+  disabled = false,
+  isReconnecting = false,  // 재연결 시도 상태 추가
+  connectionAttempts = 0    // 연결 시도 횟수 추가
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -31,6 +33,19 @@ const VoiceRecorder = ({
   const silenceTimerRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const inputRef = useRef(null);
+
+  // 연결 상태 메시지 헬퍼 함수
+  const getConnectionMessage = () => {
+    if (isConnected) {
+      return null;
+    } else if (isReconnecting) {
+      return '서버 재연결 시도 중...';
+    } else if (connectionAttempts >= 4) {
+      return '서버 연결 대기중...';
+    } else {
+      return '서버 연결 중...';
+    }
+  };
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -95,8 +110,8 @@ const VoiceRecorder = ({
           
           // Send transcript if it's not empty
           if (transcript.trim() && onTranscript) {
-            // Check connection before sending
-            if (!isConnected) {
+            // Check connection before sending - 재연결 중에는 경고하지 않음
+            if (!isConnected && !isReconnecting && connectionAttempts >= 4) {
               setError('서버 연결이 끊겼습니다. 잠시 후 다시 시도해주세요.');
               toast.error('서버 연결이 끊겼습니다.');
               cleanup();
@@ -202,7 +217,7 @@ const VoiceRecorder = ({
     return () => {
       cleanup();
     };
-  }, [onTranscript, isConnected, cleanup]);
+  }, [onTranscript, isConnected, isReconnecting, connectionAttempts, cleanup]);
 
   const startRecording = async () => {
     // Check prerequisites
@@ -211,7 +226,8 @@ const VoiceRecorder = ({
       return;
     }
 
-    if (!isConnected) {
+    // 재연결 중이 아니고 4회 시도 후 실패한 경우에만 에러 표시
+    if (!isConnected && !isReconnecting && connectionAttempts >= 4) {
       setError('서버와 연결되지 않았습니다.');
       toast.error('서버와 연결되지 않았습니다. 잠시 후 다시 시도해주세요.');
       return;
@@ -297,7 +313,8 @@ const VoiceRecorder = ({
       return;
     }
 
-    if (!isConnected) {
+    // 재연결 중이 아니고 4회 시도 후 실패한 경우에만 에러 표시
+    if (!isConnected && !isReconnecting && connectionAttempts >= 4) {
       setError('서버 연결이 끊겼습니다. 잠시 후 다시 시도해주세요.');
       toast.error('서버 연결이 끊겼습니다.');
       return;
@@ -345,6 +362,9 @@ const VoiceRecorder = ({
     });
     setError(null);
   };
+
+  // 연결 상태 메시지 가져오기
+  const connectionMessage = getConnectionMessage();
 
   // Show unsupported message only for voice mode
   if (!isSupported && inputMode === 'voice') {
@@ -401,16 +421,16 @@ const VoiceRecorder = ({
         <div className="flex items-center space-x-3">
           <button
             onClick={toggleRecording}
-            disabled={disabled || !isConnected || isInitializing}
+            disabled={disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4) || isInitializing}
             className={`relative p-3 rounded-full transition-all ${
               isRecording 
                 ? 'bg-red-500 hover:bg-red-600' 
-                : disabled || !isConnected
+                : disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4)
                   ? 'bg-gray-400 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700'
             } ${error ? 'ring-2 ring-red-400' : ''}`}
             title={
-              !isConnected 
+              !isConnected && !isReconnecting && connectionAttempts >= 4
                 ? '서버 연결 대기중' 
                 : disabled 
                   ? '음성 인식 비활성화' 
@@ -425,7 +445,7 @@ const VoiceRecorder = ({
                 <span className="absolute top-0 right-0 w-3 h-3 bg-red-400 rounded-full animate-pulse" />
               </>
             ) : (
-              <Mic className={`w-6 h-6 ${disabled || !isConnected ? 'text-gray-300' : 'text-white'}`} />
+              <Mic className={`w-6 h-6 ${disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4) ? 'text-gray-300' : 'text-white'}`} />
             )}
           </button>
           
@@ -458,10 +478,10 @@ const VoiceRecorder = ({
               </div>
             )}
             
-            {!isConnected && !isRecording && (
-              <div className="flex items-center text-yellow-600">
+            {connectionMessage && !isRecording && (
+              <div className={`flex items-center ${isReconnecting ? 'text-gray-600' : 'text-yellow-600'}`}>
                 <AlertCircle className="w-4 h-4 mr-1" />
-                <p className="text-sm">서버 연결 대기중...</p>
+                <p className="text-sm">{connectionMessage}</p>
               </div>
             )}
             
@@ -492,40 +512,38 @@ const VoiceRecorder = ({
               value={keyboardInput}
               onChange={(e) => setKeyboardInput(e.target.value)}
               onKeyPress={handleKeyPress}
-              disabled={disabled || !isConnected}
+              disabled={disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4)}
               placeholder={
-                !isConnected 
-                  ? '서버 연결 대기중...' 
-                  : '메시지를 입력하세요 (Enter로 전송)'
+                connectionMessage || '메시지를 입력하세요 (Enter로 전송)'
               }
               className={`flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 ${
-                disabled || !isConnected 
+                disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4)
                   ? 'bg-gray-100 border-gray-300 cursor-not-allowed' 
                   : 'bg-white border-gray-300 focus:ring-blue-500 focus:border-blue-500'
               }`}
             />
             <button
               onClick={handleKeyboardSubmit}
-              disabled={disabled || !isConnected || !keyboardInput.trim()}
+              disabled={disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4) || !keyboardInput.trim()}
               className={`p-2.5 rounded-lg transition-all ${
-                disabled || !isConnected || !keyboardInput.trim()
+                disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4) || !keyboardInput.trim()
                   ? 'bg-gray-400 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700'
               }`}
               title="메시지 전송"
             >
               <Send className={`w-5 h-5 ${
-                disabled || !isConnected || !keyboardInput.trim() 
+                disabled || (!isConnected && !isReconnecting && connectionAttempts >= 4) || !keyboardInput.trim() 
                   ? 'text-gray-300' 
                   : 'text-white'
               }`} />
             </button>
           </div>
           
-          {!isConnected && (
-            <div className="flex items-center text-yellow-600">
+          {connectionMessage && (
+            <div className={`flex items-center ${isReconnecting ? 'text-gray-600' : 'text-yellow-600'}`}>
               <AlertCircle className="w-4 h-4 mr-1" />
-              <p className="text-sm">서버 연결 대기중...</p>
+              <p className="text-sm">{connectionMessage}</p>
             </div>
           )}
           
@@ -545,8 +563,14 @@ const VoiceRecorder = ({
       )}
       
       {/* Connection status indicator */}
-      <div className={`mt-2 text-xs ${isConnected ? 'text-green-600' : 'text-red-600'}`}>
-        {isConnected ? '● 서버 연결됨' : '● 서버 연결 끊김'}
+      <div className={`mt-2 text-xs ${
+        isConnected ? 'text-green-600' : 
+        isReconnecting ? 'text-gray-600' : 
+        'text-red-600'
+      }`}>
+        {isConnected ? '● 서버 연결됨' : 
+         isReconnecting ? '● 재연결 시도 중' : 
+         '● 서버 연결 끊김'}
       </div>
     </div>
   );
