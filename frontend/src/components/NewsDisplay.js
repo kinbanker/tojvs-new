@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { 
   ExternalLink, 
   Calendar, 
@@ -26,7 +26,18 @@ const getSocialPosts = (data) => {
 
 const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = null }) => {
   const [activeTab, setActiveTab] = useState('all');
+  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
   const newsData = useMemo(() => data, [data]);
+
+  // 화면 크기 감지
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktop(window.innerWidth >= 768);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Debug logging for received data
   React.useEffect(() => {
@@ -76,8 +87,14 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
   const socialPosts = getSocialPosts(newsData);
   const hasContent = articles.length > 0 || socialPosts.length > 0;
 
-  // Filter content based on active tab
+  // Filter content based on active tab - 모바일일 때만 사용
   const getFilteredContent = () => {
+    // 데스크톱에서는 탭에 관계없이 모든 콘텐츠를 보여줌
+    if (isDesktop) {
+      return { articles, socialPosts };
+    }
+    
+    // 모바일에서는 탭에 따라 필터링
     if (activeTab === 'news') return { articles, socialPosts: [] };
     if (activeTab === 'social') return { articles: [], socialPosts };
     return { articles, socialPosts };
@@ -131,205 +148,380 @@ const NewsDisplay = ({ data, isConnected = false, isLoading = false, error = nul
 
       {hasContent && (
         <>
-          {/* Tab Navigation */}
-          <div className="flex space-x-2 border-b border-gray-200">
-            <button
-              onClick={() => setActiveTab('all')}
-              className={`px-4 py-2 font-medium transition-colors border-b-2 ${
-                activeTab === 'all'
-                  ? 'text-blue-600 border-blue-600'
-                  : 'text-gray-500 border-transparent hover:text-gray-700'
-              }`}
-            >
-              전체 ({articles.length + socialPosts.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('news')}
-              className={`px-4 py-2 font-medium transition-colors border-b-2 ${
-                activeTab === 'news'
-                  ? 'text-blue-600 border-blue-600'
-                  : 'text-gray-500 border-transparent hover:text-gray-700'
-              }`}
-            >
-              <Newspaper className="w-4 h-4 inline mr-1" />
-              뉴스 ({articles.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('social')}
-              className={`px-4 py-2 font-medium transition-colors border-b-2 ${
-                activeTab === 'social'
-                  ? 'text-blue-600 border-blue-600'
-                  : 'text-gray-500 border-transparent hover:text-gray-700'
-              }`}
-            >
-              <Twitter className="w-4 h-4 inline mr-1" />
-              소셜 ({socialPosts.length})
-            </button>
-          </div>
-
-          {/* News Articles */}
-          {filteredArticles.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="text-xl font-bold text-gray-800 flex items-center">
-                <Newspaper className="w-5 h-5 mr-2 text-blue-600" />
-                최신 뉴스
-              </h3>
-              <div className="grid gap-4 md:grid-cols-2">
-                {filteredArticles.map((item, index) => (
-                  <article
-                    key={index}
-                    className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-lg transition-all duration-200 overflow-hidden group"
-                  >
-                    {/* Image Section */}
-                    {item.imageUrl ? (
-                      <div className="h-48 overflow-hidden bg-gray-100">
-                        <img 
-                          src={item.imageUrl} 
-                          alt={item.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          onError={(e) => {
-                            e.target.onerror = null;
-                            e.target.style.display = 'none';
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="h-48 bg-gradient-to-br from-gray-100 to-gray-50 flex items-center justify-center">
-                        <ImageIcon className="w-12 h-12 text-gray-300" />
-                      </div>
-                    )}
-
-                    <div className="p-5">
-                      {/* Source & Time */}
-                      <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-                        <span className="font-medium text-blue-600">
-                          {item.source || '뉴스'}
-                        </span>
-                        {item.publishedAt && (
-                          <span className="flex items-center">
-                            <Clock className="w-3 h-3 mr-1" />
-                            {new Date(item.publishedAt).toLocaleDateString('ko-KR', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Title */}
-                      <h4 className="font-bold text-gray-900 mb-2 line-clamp-2 group-hover:text-blue-600 transition-colors">
-                        {item.title}
-                      </h4>
-
-                      {/* Description */}
-                      <p className="text-gray-600 text-sm mb-4 line-clamp-3">
-                        {item.description}
-                      </p>
-
-                      {/* Read More Link */}
-                      {item.url && (
-                        <a
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center text-blue-600 hover:text-blue-700 text-sm font-medium group/link"
-                        >
-                          자세히 보기
-                          <ChevronRight className="w-4 h-4 ml-1 group-hover/link:translate-x-1 transition-transform" />
-                        </a>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
+          {/* Tab Navigation - 모바일에서만 표시 */}
+          {!isDesktop && (
+            <div className="flex space-x-2 border-b border-gray-200">
+              <button
+                onClick={() => setActiveTab('all')}
+                className={`px-4 py-2 font-medium transition-colors border-b-2 ${
+                  activeTab === 'all'
+                    ? 'text-blue-600 border-blue-600'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                전체 ({articles.length + socialPosts.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('news')}
+                className={`px-4 py-2 font-medium transition-colors border-b-2 ${
+                  activeTab === 'news'
+                    ? 'text-blue-600 border-blue-600'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                <Newspaper className="w-4 h-4 inline mr-1" />
+                뉴스 ({articles.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('social')}
+                className={`px-4 py-2 font-medium transition-colors border-b-2 ${
+                  activeTab === 'social'
+                    ? 'text-blue-600 border-blue-600'
+                    : 'text-gray-500 border-transparent hover:text-gray-700'
+                }`}
+              >
+                <Twitter className="w-4 h-4 inline mr-1" />
+                소셜 ({socialPosts.length})
+              </button>
             </div>
           )}
 
-          {/* Social Media Posts */}
-          {filteredSocial.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="text-xl font-bold text-gray-800 flex items-center">
-                <Twitter className="w-5 h-5 mr-2 text-blue-400" />
-                소셜 미디어
-              </h3>
-              <div className="space-y-3">
-                {filteredSocial.map((post, index) => (
-                  <div
-                    key={index}
-                    className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200 p-5"
-                  >
-                    <div className="flex items-start space-x-4">
-                      {/* Avatar */}
-                      <div className="flex-shrink-0">
-                        <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center">
-                          <User className="w-6 h-6 text-white" />
-                        </div>
-                      </div>
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        {/* Author Info */}
-                        <div className="flex items-center justify-between mb-2">
-                          <div>
-                            <p className="font-semibold text-gray-900">
-                              {post.author || 'Unknown'}
-                            </p>
-                            <p className="text-sm text-gray-500">
-                              {post.username || '@user'}
-                            </p>
+          {/* Desktop Layout: 2/3 News + 1/3 Social */}
+          {isDesktop && (articles.length > 0 || socialPosts.length > 0) ? (
+            <div className="flex gap-6">
+              {/* Left: News Articles (2/3 width) */}
+              {articles.length > 0 && (
+                <div className="flex-1 lg:w-2/3">
+                  <h3 className="text-xl font-bold text-gray-800 flex items-center mb-4">
+                    <Newspaper className="w-5 h-5 mr-2 text-blue-600" />
+                    최신 뉴스
+                  </h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {articles.map((item, index) => (
+                      <article
+                        key={index}
+                        className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-lg transition-all duration-200 overflow-hidden group"
+                      >
+                        {/* Image Section */}
+                        {item.imageUrl ? (
+                          <div className="h-48 overflow-hidden bg-gray-100">
+                            <img 
+                              src={item.imageUrl} 
+                              alt={item.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              onError={(e) => {
+                                e.target.onerror = null;
+                                e.target.style.display = 'none';
+                              }}
+                            />
                           </div>
-                          <Twitter className="w-5 h-5 text-blue-400" />
-                        </div>
-
-                        {/* Post Content */}
-                        <p className="text-gray-800 mb-3 whitespace-pre-wrap">
-                          {post.text}
-                        </p>
-
-                        {/* Hashtags */}
-                        {post.hashtags && post.hashtags.length > 0 && (
-                          <div className="flex flex-wrap gap-2 mb-3">
-                            {post.hashtags.map((tag, idx) => (
-                              <span
-                                key={idx}
-                                className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 text-xs rounded-full"
-                              >
-                                <Hash className="w-3 h-3 mr-1" />
-                                {tag}
-                              </span>
-                            ))}
+                        ) : (
+                          <div className="h-48 bg-gradient-to-br from-gray-100 to-gray-50 flex items-center justify-center">
+                            <ImageIcon className="w-12 h-12 text-gray-300" />
                           </div>
                         )}
 
-                        {/* Engagement Stats */}
-                        <div className="flex items-center space-x-6 text-sm text-gray-500">
-                          {post.likes !== undefined && (
-                            <span className="flex items-center">
-                              <TrendingUp className="w-4 h-4 mr-1" />
-                              {post.likes.toLocaleString()}
+                        <div className="p-5">
+                          {/* Source & Time */}
+                          <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+                            <span className="font-medium text-blue-600">
+                              {item.source || '뉴스'}
                             </span>
-                          )}
-                          {post.retweets !== undefined && (
-                            <span className="flex items-center">
-                              <MessageCircle className="w-4 h-4 mr-1" />
-                              {post.retweets.toLocaleString()}
-                            </span>
-                          )}
-                          {post.createdAt && (
-                            <span className="flex items-center">
-                              <Calendar className="w-4 h-4 mr-1" />
-                              {new Date(post.createdAt).toLocaleDateString('ko-KR')}
-                            </span>
+                            {item.publishedAt && (
+                              <span className="flex items-center">
+                                <Clock className="w-3 h-3 mr-1" />
+                                {new Date(item.publishedAt).toLocaleDateString('ko-KR', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Title */}
+                          <h4 className="font-bold text-gray-900 mb-2 line-clamp-2 group-hover:text-blue-600 transition-colors">
+                            {item.title}
+                          </h4>
+
+                          {/* Description */}
+                          <p className="text-gray-600 text-sm mb-4 line-clamp-3">
+                            {item.description}
+                          </p>
+
+                          {/* Read More Link */}
+                          {item.url && (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center text-blue-600 hover:text-blue-700 text-sm font-medium group/link"
+                            >
+                              자세히 보기
+                              <ChevronRight className="w-4 h-4 ml-1 group-hover/link:translate-x-1 transition-transform" />
+                            </a>
                           )}
                         </div>
-                      </div>
-                    </div>
+                      </article>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
+
+              {/* Right: Social Media (1/3 width) */}
+              {socialPosts.length > 0 && (
+                <div className="lg:w-1/3">
+                  <h3 className="text-xl font-bold text-gray-800 flex items-center mb-4">
+                    <Twitter className="w-5 h-5 mr-2 text-blue-400" />
+                    소셜 미디어
+                  </h3>
+                  <div className="space-y-3">
+                    {socialPosts.map((post, index) => (
+                      <div
+                        key={index}
+                        className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200 p-4"
+                      >
+                        <div className="flex items-start space-x-3">
+                          {/* Avatar */}
+                          <div className="flex-shrink-0">
+                            <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center">
+                              <User className="w-5 h-5 text-white" />
+                            </div>
+                          </div>
+
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            {/* Author Info */}
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <p className="font-semibold text-gray-900 text-sm">
+                                  {post.author || 'Unknown'}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {post.username || '@user'}
+                                </p>
+                              </div>
+                              <Twitter className="w-4 h-4 text-blue-400" />
+                            </div>
+
+                            {/* Post Content */}
+                            <p className="text-gray-800 text-sm mb-3 whitespace-pre-wrap">
+                              {post.text}
+                            </p>
+
+                            {/* Hashtags */}
+                            {post.hashtags && post.hashtags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mb-2">
+                                {post.hashtags.map((tag, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="inline-flex items-center px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded-full"
+                                  >
+                                    <Hash className="w-3 h-3 mr-0.5" />
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Engagement Stats */}
+                            <div className="flex items-center space-x-4 text-xs text-gray-500">
+                              {post.likes !== undefined && (
+                                <span className="flex items-center">
+                                  <TrendingUp className="w-3 h-3 mr-1" />
+                                  {post.likes.toLocaleString()}
+                                </span>
+                              )}
+                              {post.retweets !== undefined && (
+                                <span className="flex items-center">
+                                  <MessageCircle className="w-3 h-3 mr-1" />
+                                  {post.retweets.toLocaleString()}
+                                </span>
+                              )}
+                              {post.createdAt && (
+                                <span className="flex items-center">
+                                  <Calendar className="w-3 h-3 mr-1" />
+                                  {new Date(post.createdAt).toLocaleDateString('ko-KR')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+          ) : (
+            // Mobile Layout: Stack vertically
+            <>
+              {/* News Articles */}
+              {filteredArticles.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-xl font-bold text-gray-800 flex items-center">
+                    <Newspaper className="w-5 h-5 mr-2 text-blue-600" />
+                    최신 뉴스
+                  </h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {filteredArticles.map((item, index) => (
+                      <article
+                        key={index}
+                        className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-lg transition-all duration-200 overflow-hidden group"
+                      >
+                        {/* Image Section */}
+                        {item.imageUrl ? (
+                          <div className="h-48 overflow-hidden bg-gray-100">
+                            <img 
+                              src={item.imageUrl} 
+                              alt={item.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              onError={(e) => {
+                                e.target.onerror = null;
+                                e.target.style.display = 'none';
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="h-48 bg-gradient-to-br from-gray-100 to-gray-50 flex items-center justify-center">
+                            <ImageIcon className="w-12 h-12 text-gray-300" />
+                          </div>
+                        )}
+
+                        <div className="p-5">
+                          {/* Source & Time */}
+                          <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+                            <span className="font-medium text-blue-600">
+                              {item.source || '뉴스'}
+                            </span>
+                            {item.publishedAt && (
+                              <span className="flex items-center">
+                                <Clock className="w-3 h-3 mr-1" />
+                                {new Date(item.publishedAt).toLocaleDateString('ko-KR', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Title */}
+                          <h4 className="font-bold text-gray-900 mb-2 line-clamp-2 group-hover:text-blue-600 transition-colors">
+                            {item.title}
+                          </h4>
+
+                          {/* Description */}
+                          <p className="text-gray-600 text-sm mb-4 line-clamp-3">
+                            {item.description}
+                          </p>
+
+                          {/* Read More Link */}
+                          {item.url && (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center text-blue-600 hover:text-blue-700 text-sm font-medium group/link"
+                            >
+                              자세히 보기
+                              <ChevronRight className="w-4 h-4 ml-1 group-hover/link:translate-x-1 transition-transform" />
+                            </a>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Social Media Posts */}
+              {filteredSocial.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-xl font-bold text-gray-800 flex items-center">
+                    <Twitter className="w-5 h-5 mr-2 text-blue-400" />
+                    소셜 미디어
+                  </h3>
+                  <div className="space-y-3">
+                    {filteredSocial.map((post, index) => (
+                      <div
+                        key={index}
+                        className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-all duration-200 p-5"
+                      >
+                        <div className="flex items-start space-x-4">
+                          {/* Avatar */}
+                          <div className="flex-shrink-0">
+                            <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center">
+                              <User className="w-6 h-6 text-white" />
+                            </div>
+                          </div>
+
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            {/* Author Info */}
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <p className="font-semibold text-gray-900">
+                                  {post.author || 'Unknown'}
+                                </p>
+                                <p className="text-sm text-gray-500">
+                                  {post.username || '@user'}
+                                </p>
+                              </div>
+                              <Twitter className="w-5 h-5 text-blue-400" />
+                            </div>
+
+                            {/* Post Content */}
+                            <p className="text-gray-800 mb-3 whitespace-pre-wrap">
+                              {post.text}
+                            </p>
+
+                            {/* Hashtags */}
+                            {post.hashtags && post.hashtags.length > 0 && (
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {post.hashtags.map((tag, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="inline-flex items-center px-2 py-1 bg-blue-50 text-blue-600 text-xs rounded-full"
+                                  >
+                                    <Hash className="w-3 h-3 mr-1" />
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Engagement Stats */}
+                            <div className="flex items-center space-x-6 text-sm text-gray-500">
+                              {post.likes !== undefined && (
+                                <span className="flex items-center">
+                                  <TrendingUp className="w-4 h-4 mr-1" />
+                                  {post.likes.toLocaleString()}
+                                </span>
+                              )}
+                              {post.retweets !== undefined && (
+                                <span className="flex items-center">
+                                  <MessageCircle className="w-4 h-4 mr-1" />
+                                  {post.retweets.toLocaleString()}
+                                </span>
+                              )}
+                              {post.createdAt && (
+                                <span className="flex items-center">
+                                  <Calendar className="w-4 h-4 mr-1" />
+                                  {new Date(post.createdAt).toLocaleDateString('ko-KR')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
